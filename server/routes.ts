@@ -4625,23 +4625,27 @@ export async function registerRoutes(
 
         console.log(`Saving edits for version ${versionId}:`, Object.keys(editedFields));
 
-        // Group edits by boqItemId
-        const editsByItem: Record<string, Record<number, any>> = {};
+        // Group edits by boqItemId and type
+        const editsByItem: Record<string, { engine: Record<number, any>, manual: Record<number, any> }> = {};
         for (const [key, fields] of Object.entries(editedFields)) {
-          const lastDashIndex = key.lastIndexOf("-");
-          if (lastDashIndex === -1) {
+          const parts = key.split("-");
+          if (parts.length < 3) {
             console.warn(`[save-edits] Invalid edit key format: ${key}`);
             continue;
           }
-          let boqItemId = key.substring(0, lastDashIndex).trim();
-          const itemIdxStr = key.substring(lastDashIndex + 1);
-          const itemIdx = parseInt(itemIdxStr, 10);
+          
+          const itemIdx = parseInt(parts[parts.length - 1], 10);
+          const type = parts[parts.length - 2]; // "engine" or "manual"
+          // Reconstruct boqItemId (everything before the type and index)
+          const boqItemId = parts.slice(0, parts.length - 2).join("-");
 
-          // If the key contains suffixes like "-manual" or "-engine", strip them to find the real boqItemId
-          boqItemId = boqItemId.replace(/-manual$|-engine$/, "");
-
-          if (!editsByItem[boqItemId]) editsByItem[boqItemId] = {};
-          editsByItem[boqItemId][itemIdx] = fields;
+          if (!editsByItem[boqItemId]) editsByItem[boqItemId] = { engine: {}, manual: {} };
+          
+          if (type === "engine") {
+            editsByItem[boqItemId].engine[itemIdx] = fields;
+          } else {
+            editsByItem[boqItemId].manual[itemIdx] = fields;
+          }
         }
 
         console.log("Grouped edits by BOQ Item ID:", Object.keys(editsByItem));
@@ -4650,7 +4654,7 @@ export async function registerRoutes(
         let totalItemsUpdated = 0;
         const updatedRows: any[] = [];
 
-        for (const [boqItemId, itemEdits] of Object.entries(editsByItem)) {
+        for (const [boqItemId, types] of Object.entries(editsByItem)) {
           console.log(`Processing edits for BOQ Item ID: ${boqItemId}`);
 
           // Fetch existing item
@@ -4674,24 +4678,32 @@ export async function registerRoutes(
             }
           }
 
-          if (!tableData || !tableData.step11_items || !Array.isArray(tableData.step11_items)) {
-            console.warn(`BOQ item ${boqItemId} has no valid step11_items array`, tableData);
-            continue;
+          let editsAppliedToThisItem = 0;
+
+          // Apply Engine Edits (materialLines)
+          for (const [itemIdxStr, fields] of Object.entries(types.engine)) {
+            const itemIdx = parseInt(itemIdxStr, 10);
+            if (tableData.materialLines && tableData.materialLines[itemIdx]) {
+              console.log(`Applying ENGINE edits to material index ${itemIdx} of BOQ Item ${boqItemId}`);
+              const f = fields as any;
+              // MaterialLines uses supplyRate/installRate (camelCase)
+              if (f.supply_rate !== undefined) tableData.materialLines[itemIdx].supplyRate = Number(f.supply_rate);
+              if (f.install_rate !== undefined) tableData.materialLines[itemIdx].installRate = Number(f.install_rate);
+              if (f.qty !== undefined) tableData.materialLines[itemIdx].perUnitQty = Number(f.qty);
+              editsAppliedToThisItem++;
+            }
           }
 
-          // Apply edits to step11_items array
-          let editsAppliedToThisItem = 0;
-          for (const [itemIdxStr, fields] of Object.entries(itemEdits)) {
+          // Apply Manual Edits (step11_items)
+          for (const [itemIdxStr, fields] of Object.entries(types.manual)) {
             const itemIdx = parseInt(itemIdxStr, 10);
-            if (tableData.step11_items[itemIdx]) {
-              console.log(`Applying edits to sub-item index ${itemIdx} of BOQ Item ${boqItemId}`);
+            if (tableData.step11_items && tableData.step11_items[itemIdx]) {
+              console.log(`Applying MANUAL edits to sub-item index ${itemIdx} of BOQ Item ${boqItemId}`);
               tableData.step11_items[itemIdx] = {
                 ...tableData.step11_items[itemIdx],
                 ...fields as any
               };
               editsAppliedToThisItem++;
-            } else {
-              console.warn(`Sub-item index ${itemIdx} NOT FOUND in step11_items of BOQ Item ${boqItemId}`);
             }
           }
 
@@ -7519,8 +7531,12 @@ export async function registerRoutes(
         queryStr += ` AND status = $${params.length}`;
       }
 
-      params.push(user.id);
-      queryStr += ` AND project_id IN (SELECT project_id FROM user_project_permissions WHERE user_id = $${params.length})`;
+      if (user.role === 'admin' || user.role === 'software_team') {
+        // Admins and software team see all requests
+      } else {
+        params.push(user.id);
+        queryStr += ` AND project_id IN (SELECT project_id FROM user_project_permissions WHERE user_id = $${params.length})`;
+      }
 
       queryStr += ` ORDER BY created_at DESC`;
 

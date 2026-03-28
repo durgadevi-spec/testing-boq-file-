@@ -460,6 +460,10 @@ function BoqItemCard({ boqItem, boqIdx, isVersionSubmitted, expandedProductIds, 
     });
     const manualStep11 = step11Items.map((it: any, s11Idx: number) => {
       if (!it?.manual) return null;
+      // Also skip if this item is somehow already represented in materialLines (by ID comparison)
+      // This handles cases where a template might have both populated inconsistently
+      if (tableData.materialLines?.some((ml: any) => (ml.id || ml.materialId) === it.id)) return null;
+
       const itemKey = `${boqItem.id}-manual-${s11Idx}`;
       const qty = Number(getEditedValue(itemKey, "qty", it.qty ?? 0)) || 0;
       const sRate = Number(getEditedValue(itemKey, "supply_rate", it.supply_rate ?? 0)) || 0;
@@ -906,6 +910,7 @@ export default function CreateBom() {
   const [newTemplateName, setNewTemplateName] = useState("");
   const [templateSearch, setTemplateSearch] = useState("");
   const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean; type: 'template' | 'sketch' | 'version'; id: string; name: string } | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const loadTemplates = useCallback(async () => {
     try {
@@ -947,7 +952,8 @@ export default function CreateBom() {
   };
 
   const handleApplyTemplate = async (template: any) => {
-    if (!selectedVersionId) return;
+    if (!selectedVersionId || isSaving) return;
+    setIsSaving(true);
 
     try {
       // Create a new BOQ item with this template's config
@@ -976,11 +982,14 @@ export default function CreateBom() {
     } catch (e) {
       console.error("Apply template error:", e);
       toast({ title: "Error", description: "Failed to apply template", variant: "destructive" });
+    } finally {
+      setIsSaving(false);
     }
   };
 
   const handleApplySketchTemplate = async (template: any) => {
-    if (!selectedVersionId) return;
+    if (!selectedVersionId || isSaving) return;
+    setIsSaving(true);
 
     try {
       let data = template.template_data;
@@ -1068,6 +1077,8 @@ export default function CreateBom() {
     } catch (e) {
       console.error("Apply sketch template error:", e);
       toast({ title: "Error", description: "Failed to import sketch template", variant: "destructive" });
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -1713,7 +1724,8 @@ export default function CreateBom() {
 
   const saveBoqItem = async (tableData: any) => {
     const product = selectedProduct;
-    if (!product || !selectedProjectId || !selectedVersionId) return;
+    if (!product || !selectedProjectId || !selectedVersionId || isSaving) return;
+    setIsSaving(true);
     try {
       const res = await apiFetch("/api/boq-items", {
         method: "POST",
@@ -1733,6 +1745,8 @@ export default function CreateBom() {
       loadTemplates();
     } catch (err) {
       toast({ title: "Error", description: "Failed to save BOQ item", variant: "destructive" });
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -1870,6 +1884,9 @@ export default function CreateBom() {
           }));
           const manualStep11 = step11Items.map((it: any, s11Idx: number) => {
             if (!it?.manual) return null;
+            // Also skip if this item is somehow already represented in materialLines (by ID comparison)
+            if (tableData.materialLines?.some((ml: any) => (ml.id || ml.materialId) === it.id)) return null;
+
             const itemKey = `${boqItem.id}-manual-${s11Idx}`;
             const qty = Number(getEditedValue(itemKey, "qty", it.qty ?? 0)) || 0;
             const sRate = Number(getEditedValue(itemKey, "supply_rate", it.supply_rate ?? 0)) || 0;
@@ -2060,7 +2077,12 @@ export default function CreateBom() {
             qtyPerSqf: line.perUnitQty, requiredQty: line.scaledQty, roundOff: line.roundOffQty,
             rate: line.supplyRate + line.installRate, amount: line.lineTotal
           }));
-          const manualStep11 = step11Items.filter((i: any) => i?.manual).map((it: any, s11Idx: number) => {
+          const manualStep11 = step11Items.filter((i: any) => {
+            if (!i?.manual) return false;
+            // Also skip if this item is somehow already represented in materialLines (by ID comparison)
+            if (td.materialLines?.some((ml: any) => (ml.id || ml.materialId) === i.id)) return false;
+            return true;
+          }).map((it: any, s11Idx: number) => {
             const key = `${boqItem.id}-manual-${it._s11Idx ?? s11Idx}`;
             const qty = Number(getEditedValue(key, "qty", it.qty ?? 0)) || 0;
             const rate = Number(getEditedValue(key, "rate", (it.supply_rate ?? 0) + (it.install_rate ?? 0)));
