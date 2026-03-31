@@ -31,8 +31,29 @@ export class PostgresStorage implements IStorage {
       );
     });
 
+    this.ensureShopsColumns().catch((err) => {
+      console.warn(
+        "[storage] Could not ensure shops columns:",
+        (err as any)?.message || err
+      );
+    });
+
     // Comment this if you don't want demo users
     this.seedDemoUsers().catch(console.error);
+
+    // Ensure audit logs table exists
+    this.ensureAuditLogsTable().catch((err) => {
+      console.warn(
+        "[storage] Could not ensure audit_logs table:",
+        (err as any)?.message || err
+      );
+    });
+  }
+
+  private async ensureShopsColumns(): Promise<void> {
+    await this.pool.query(
+      `ALTER TABLE shops ADD COLUMN IF NOT EXISTS vendor_category text`
+    );
   }
 
   private async ensureUserApprovalColumns(): Promise<void> {
@@ -42,6 +63,57 @@ export class PostgresStorage implements IStorage {
     await this.pool.query(
       `ALTER TABLE users ADD COLUMN IF NOT EXISTS approval_reason text`
     );
+    await this.pool.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS vendor_categories text`
+    );
+  }
+
+  private async ensureAuditLogsTable(): Promise<void> {
+    // Create table if not exists
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id VARCHAR(36),
+        username TEXT,
+        role TEXT,
+        action TEXT NOT NULL,
+        module TEXT,
+        page TEXT,
+        details TEXT,
+        before_data TEXT,
+        after_data TEXT,
+        ip_address TEXT,
+        user_agent TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      )
+    `);
+
+    // Ensure all columns exist individually (in case table was created partially)
+    const columns = [
+      { name: "user_id", type: "VARCHAR(36)" },
+      { name: "username", type: "TEXT" },
+      { name: "role", type: "TEXT" },
+      { name: "action", type: "TEXT" },
+      { name: "module", type: "TEXT" },
+      { name: "page", type: "TEXT" },
+      { name: "details", type: "TEXT" },
+      { name: "before_data", type: "TEXT" },
+      { name: "after_data", type: "TEXT" },
+      { name: "ip_address", type: "TEXT" },
+      { name: "user_agent", type: "TEXT" },
+      { name: "created_at", type: "TIMESTAMP WITH TIME ZONE DEFAULT NOW()" }
+    ];
+
+    for (const col of columns) {
+      try {
+        await this.pool.query(
+          `ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS ${col.name} ${col.type}`
+        );
+      } catch (e) {
+        console.warn(`[storage] Could not add column ${col.name} to audit_logs:`, (e as any).message);
+      }
+    }
+    console.log("[storage] Successfully ensured audit_logs table and columns");
   }
 
   private mapDbUser(row: any): User {
@@ -56,8 +128,10 @@ export class PostgresStorage implements IStorage {
       companyName: row.company_name ?? row.companyName ?? null,
       gstNumber: row.gst_number ?? row.gstNumber ?? null,
       businessAddress: row.business_address ?? row.businessAddress ?? null,
+      vendorCategories: row.vendor_categories ?? row.vendorCategories ?? null,
       createdAt: row.created_at ?? row.createdAt ?? null,
       updatedAt: row.updated_at ?? row.updatedAt ?? null,
+      shopId: row.shop_id ?? row.shopId ?? null,
     };
 
     // Ensure approved always has a usable value
@@ -120,23 +194,24 @@ export class PostgresStorage implements IStorage {
     const result = await this.pool.query(
       `
       SELECT
-        id,
-        username,
-        password,
-        role,
-        approved,
-        approval_reason,
-        full_name,
-        mobile_number,
-        department,
-        employee_code,
-        company_name,
-        gst_number,
-        business_address,
-        created_at,
-        updated_at
-      FROM users
-      WHERE id = $1
+        u.id,
+        u.username,
+        u.password,
+        u.role,
+        u.approved,
+        u.approval_reason,
+        u.full_name,
+        u.mobile_number,
+        u.department,
+        u.employee_code,
+        u.company_name,
+        u.gst_number,
+        u.business_address,
+        u.created_at,
+        u.updated_at,
+        (SELECT s.id FROM shops s WHERE s.owner_id::text = u.id::text LIMIT 1) as shop_id
+      FROM users u
+      WHERE u.id = $1
       `,
       [id]
     );
@@ -151,23 +226,24 @@ export class PostgresStorage implements IStorage {
     const result = await this.pool.query(
       `
       SELECT
-        id,
-        username,
-        password,
-        role,
-        approved,
-        approval_reason,
-        full_name,
-        mobile_number,
-        department,
-        employee_code,
-        company_name,
-        gst_number,
-        business_address,
-        created_at,
-        updated_at
-      FROM users
-      WHERE username = $1
+        u.id,
+        u.username,
+        u.password,
+        u.role,
+        u.approved,
+        u.approval_reason,
+        u.full_name,
+        u.mobile_number,
+        u.department,
+        u.employee_code,
+        u.company_name,
+        u.gst_number,
+        u.business_address,
+        u.created_at,
+        u.updated_at,
+        (SELECT s.id FROM shops s WHERE s.owner_id::text = u.id::text LIMIT 1) as shop_id
+      FROM users u
+      WHERE u.username = $1
       LIMIT 1
       `,
       [username]
@@ -184,7 +260,7 @@ export class PostgresStorage implements IStorage {
     const hashedPassword = await hashPassword(user.password);
 
     // suppliers must start pending, everyone else approved
-    const approved = user.role === "supplier" ? "pending" : "approved";
+    const approved = "approved";
 
     // Ensure columns exist (in case first run)
     await this.ensureUserApprovalColumns();
@@ -248,22 +324,23 @@ export class PostgresStorage implements IStorage {
     const result = await this.pool.query(
       `
       SELECT
-        id,
-        username,
-        password,
-        role,
-        approved,
-        approval_reason,
-        full_name,
-        mobile_number,
-        department,
-        employee_code,
-        company_name,
-        gst_number,
-        business_address,
-        created_at,
-        updated_at
-      FROM users
+        u.id,
+        u.username,
+        u.password,
+        u.role,
+        u.approved,
+        u.approval_reason,
+        u.full_name,
+        u.mobile_number,
+        u.department,
+        u.employee_code,
+        u.company_name,
+        u.gst_number,
+        u.business_address,
+        u.created_at,
+        u.updated_at,
+        (SELECT s.id FROM shops s WHERE s.owner_id::text = u.id::text LIMIT 1) as shop_id
+      FROM users u
       `
     );
     return result.rows.map((r) => this.mapDbUser(r));
@@ -330,7 +407,7 @@ export class MemStorage implements IStorage {
     const id = randomUUID();
     const hashed = await hashPassword(user.password);
 
-    const approved = user.role === "supplier" ? "pending" : "approved";
+    const approved = "approved";
 
     const newUser: User = {
       id,
