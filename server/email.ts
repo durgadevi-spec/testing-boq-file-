@@ -335,3 +335,146 @@ export async function sendSiteReportEmail(
     throw error;
   }
 }
+
+/**
+ * Send Activity Monitoring (Spy) summary email
+ */
+export async function sendAuditSummaryEmail(
+  to: string | string[],
+  logs: any[]
+) {
+  if (!resend) {
+    throw new Error("RESEND_API_KEY not configured");
+  }
+
+  try {
+    let emailHtml = `
+      <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; color: #334155; line-height: 1.6;">
+        <div style="border-bottom: 3px solid #ef4444; padding-bottom: 15px; margin-bottom: 25px; text-align: center;">
+          <h1 style="color: #b91c1c; margin: 0; font-size: 28px; text-transform: uppercase; letter-spacing: 2px;">Activity Monitoring Summary</h1>
+          <p style="color: #64748b; margin: 5px 0 0 0; font-size: 16px;">Secret Agent "Spy" Report</p>
+        </div>
+
+        <div style="background-color: #fef2f2; border-radius: 12px; padding: 20px; margin-bottom: 30px; border: 1px solid #fecaca; text-align: center;">
+          <p style="margin: 0; color: #991b1b; font-weight: bold;">This report contains sensitive activity logs from the last 50 actions.</p>
+          <p style="margin: 5px 0 0 0; font-size: 14px; color: #b91c1c;">Generated on: ${new Date().toLocaleString('en-IN')}</p>
+        </div>
+
+        <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 30px; border: 1px solid #e2e8f0;">
+          <thead>
+            <tr style="background-color: #f1f5f9; text-align: left;">
+              <th style="padding: 12px; border: 1px solid #e2e8f0;">User</th>
+              <th style="padding: 12px; border: 1px solid #e2e8f0;">Action</th>
+              <th style="padding: 12px; border: 1px solid #e2e8f0;">Module</th>
+              <th style="padding: 12px; border: 1px solid #e2e8f0;">Details</th>
+              <th style="padding: 12px; border: 1px solid #e2e8f0;">Timestamp</th>
+            </tr>
+          </thead>
+          <tbody>
+    `;
+
+    logs.forEach((log) => {
+      const actionColor = 
+        log.action === 'DELETE' ? '#ef4444' : 
+        log.action === 'CREATE' ? '#10b981' : 
+        log.action === 'UPDATE' ? '#3b82f6' : '#64748b';
+
+      emailHtml += `
+        <tr>
+          <td style="padding: 10px; border: 1px solid #e2e8f0;">
+            <div style="font-weight: bold;">${log.username || 'Unknown'}</div>
+            <div style="font-size: 11px; color: #64748b;">${log.role || '-'}</div>
+          </td>
+          <td style="padding: 10px; border: 1px solid #e2e8f0;">
+            <span style="display: inline-block; padding: 2px 8px; border-radius: 4px; background-color: ${actionColor}20; color: ${actionColor}; font-weight: bold; font-size: 11px;">
+              ${log.action}
+            </span>
+          </td>
+          <td style="padding: 10px; border: 1px solid #e2e8f0;">${log.module || '-'}</td>
+          <td style="padding: 10px; border: 1px solid #e2e8f0;">${log.details || '-'}</td>
+          <td style="padding: 10px; border: 1px solid #e2e8f0; font-size: 11px; color: #64748b;">
+            ${new Date(log.created_at).toLocaleString()}
+          </td>
+        </tr>
+      `;
+    });
+
+    emailHtml += `
+          </tbody>
+        </table>
+
+        <div style="margin-top: 40px; padding-top: 25px; border-top: 2px solid #e2e8f0; font-size: 12px; color: #94a3b8; text-align: center;">
+          <p style="margin: 0;">This is a restricted security report from the BOQ Management System.</p>
+          <p style="margin: 5px 0 0 0;">&copy; ${new Date().getFullYear()} BOQ Management System. All rights reserved.</p>
+        </div>
+      </div>
+    `;
+
+    const response = await resend.emails.send({
+      from: fromEmail,
+      to: Array.isArray(to) ? to : [to],
+      subject: `🚨 Spy Alert: Activity Summary - ${new Date().toLocaleDateString()}`,
+      html: emailHtml,
+    });
+
+    return response;
+  } catch (error) {
+    console.error("[EMAIL ERROR] sendAuditSummaryEmail:", error);
+    throw error;
+  }
+}
+
+/**
+ * Send Proposal Status Email (Approved/Rejected)
+ */
+export async function sendProposalStatusEmail(
+  to: string,
+  vendorName: string,
+  projectName: string,
+  versionNumber: number,
+  status: "approved" | "rejected",
+  reason?: string
+) {
+  if (!resend) {
+    console.log("Mocking email to", to, "about proposal status:", status);
+    return;
+  }
+
+  try {
+    const isApproved = status === "approved";
+    const statusColor = isApproved ? "#10b981" : "#ef4444";
+    const statusText = isApproved ? "APPROVED" : "REJECTED";
+    
+    let emailHtml = `
+      <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
+        <div style="text-align: center; margin-bottom: 20px; border-bottom: 2px solid ${statusColor}; padding-bottom: 15px;">
+          <h1 style="color: ${statusColor}; margin: 0;">Proposal ${statusText}</h1>
+          <p style="color: #64748b; font-size: 16px;">BOQ Management System</p>
+        </div>
+        <div style="background-color: #f8fafc; padding: 20px; border-radius: 6px;">
+          <p style="font-size: 16px; color: #1e293b;">Dear ${vendorName},</p>
+          <p style="font-size: 14px; color: #475569; line-height: 1.5;">
+            Your proposal <strong>v${versionNumber}</strong> for the project <strong>"${projectName}"</strong> has been <strong style="color: ${statusColor};">${statusText}</strong>.
+          </p>
+          ${!isApproved && reason ? `<p style="font-size: 14px; color: #991b1b; background-color: #fef2f2; padding: 10px; border-radius: 5px; border: 1px solid #fecaca;"><strong>Reason:</strong> ${reason}</p>` : ''}
+          ${isApproved ? `<p style="font-size: 14px; color: #065f46; background-color: #ecfdf5; padding: 10px; border-radius: 5px; border: 1px solid #a7f3d0;">The administrator will now be able to include your proposal items in the final BOM.</p>` : ''}
+        </div>
+        <div style="margin-top: 20px; text-align: center; font-size: 12px; color: #94a3b8;">
+          © ${new Date().getFullYear()} BOQ Management System. All rights reserved.
+        </div>
+      </div>
+    `;
+
+    const response = await resend.emails.send({
+      from: fromEmail,
+      to,
+      subject: `Proposal ${statusText}: ${projectName}`,
+      html: emailHtml,
+    });
+
+    return response;
+  } catch (error) {
+    console.error("[EMAIL ERROR] sendProposalStatusEmail:", error);
+    throw error;
+  }
+}
