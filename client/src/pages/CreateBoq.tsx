@@ -362,12 +362,13 @@ function BoqItemCard({ boqItem, boqIdx, isVersionSubmitted, expandedProductIds, 
       const iRate = Number(getEditedValue(itemKey, "install_rate", line.installRate));
       const rate = Number(getEditedValue(itemKey, "rate", sRate + iRate)) || (sRate + iRate);
 
-      const reqQty = isFrozen ? line.roundOffQty : Number((qty * calculationTarget).toFixed(2));
-      const roundOff = isFrozen ? line.roundOffQty : (line.applyRounding !== false ? Math.ceil(reqQty) : reqQty);
+      const isLumpSumLine = (line.unit || "").toLowerCase() === "ls";
+      const reqQty = isFrozen ? line.roundOffQty : (isLumpSumLine ? 1 : Number((qty * calculationTarget).toFixed(2)));
+      const roundOff = isFrozen ? line.roundOffQty : (isLumpSumLine ? 1 : (line.applyRounding !== false ? Math.ceil(reqQty) : reqQty));
 
       return {
         title: line.name, description: line.name, unit: line.unit, shop_name: line.shop_name,
-        qtyPerSqf: qty, requiredQty: reqQty, roundOff: roundOff,
+        qtyPerSqf: isLumpSumLine ? 1 : qty, requiredQty: reqQty, roundOff: roundOff,
         rateSqft: rate, amount: Number((roundOff * rate).toFixed(2)), s_no: idx + 1, manual: false,
         _materialIdx: idx, itemKey,
         freezeAndEdit: line.freezeAndEdit,
@@ -388,10 +389,11 @@ function BoqItemCard({ boqItem, boqIdx, isVersionSubmitted, expandedProductIds, 
       const rate = Number(getEditedValue(itemKey, "rate", sRate + iRate)) || (sRate + iRate);
 
       // --- FIX: Manual items should NOT be scaled by calculationTarget ---
-      const reqQty = qty;
+      const isLumpSumLine = (it.unit || "").toLowerCase() === "ls";
+      const reqQty = isLumpSumLine ? 1 : qty;
       const roundOff = reqQty; // No rounding for manual items usually, or just keep as is
       const amount = Number((reqQty * rate).toFixed(2));
-      return { ...it, manual: true, itemKey, _s11Idx: s11Idx, qtyPerSqf: qty, requiredQty: reqQty, roundOff, amount, supply_rate: sRate, install_rate: iRate };
+      return { ...it, manual: true, itemKey, _s11Idx: s11Idx, qtyPerSqf: isLumpSumLine ? 1 : qty, requiredQty: reqQty, roundOff, amount, supply_rate: sRate, install_rate: iRate };
     }).filter(Boolean);
     displayLines = [...computedLines, ...manualStep11];
   } else {
@@ -406,10 +408,11 @@ function BoqItemCard({ boqItem, boqIdx, isVersionSubmitted, expandedProductIds, 
       // However, some "Product Templates" might still want scaling. 
       // But based on user feedback, manual additions should not scale.
       const isManual = it.manual || !tableData.materialLines;
-      const scaledQty = isManual ? baseQty : Number((baseQty * calculationTarget).toFixed(2));
-      const roundOff = (it.applyRounding !== false && !isManual) ? Math.ceil(scaledQty) : scaledQty;
+      const isLumpSumLine = (it.unit || "").toLowerCase() === "ls";
+      const scaledQty = isManual ? (isLumpSumLine ? 1 : baseQty) : (isLumpSumLine ? 1 : Number((baseQty * calculationTarget).toFixed(2)));
+      const roundOff = (it.applyRounding !== false && !isManual && !isLumpSumLine) ? Math.ceil(scaledQty) : scaledQty;
       const amount = Number((roundOff * rate).toFixed(2));
-      return { ...it, itemKey, _s11Idx: s11Idx, qtyPerSqf: baseQty, qty: scaledQty, roundOff, rateSqft: rate, amount, manual: isManual };
+      return { ...it, itemKey, _s11Idx: s11Idx, qtyPerSqf: isLumpSumLine ? 1 : baseQty, qty: scaledQty, roundOff, rateSqft: rate, amount, manual: isManual };
     });
   }
 
@@ -466,8 +469,31 @@ function BoqItemCard({ boqItem, boqIdx, isVersionSubmitted, expandedProductIds, 
 
 
   const totalAmount = displayLines.reduce((sum: number, it: any) => sum + (Number(it.amount) || 0), 0);
-  const grandTotalValue = totalAmount; // Primary source of truth
-  const ratePerUnit = calculationTarget > 0 ? grandTotalValue / calculationTarget : 0;
+
+  // Calculate Standard Rate at Base Qty (e.g. 100 Sqft) to ensure consistency across projects
+  const baseQty = Number(tableData.configBasis?.baseRequiredQty || 1);
+  let standardRate = 0;
+  if (isEngineBased) {
+    // Priority 1: Use the total_cost saved in tableData/configBasis (from Manage Product)
+    const savedTotalCost = Number(tableData.total_cost ?? tableData.configBasis?.total_cost ?? 0);
+    if (savedTotalCost > 0) {
+      standardRate = savedTotalCost / baseQty;
+    } else {
+      // Priority 2: Fallback to dynamic calculation if no saved cost exists
+      try {
+        const resBase = computeBoq({ ...tableData.configBasis, wastagePctDefault: 0 }, tableData.materialLines.map((l: any) => ({ ...l, applyWastage: false })), baseQty);
+        standardRate = resBase.grandTotal / baseQty;
+      } catch { }
+    }
+  }
+
+  // Use normalized standard rate if enabled
+  const useStandardRate = !!tableData.use_standard_rate;
+  const ratePerUnit = useStandardRate ? standardRate : (calculationTarget > 0 ? totalAmount / calculationTarget : 0);
+
+  // Final grand total reflects the standard rate if used
+  const grandTotalValue = useStandardRate ? (standardRate * calculationTarget) : totalAmount;
+  const roundOffAdjustment = grandTotalValue - totalAmount;
 
   const images = parseImages(tableData.image);
   const displayImage = images.length > 0 ? images[0] : null;
@@ -500,7 +526,7 @@ function BoqItemCard({ boqItem, boqIdx, isVersionSubmitted, expandedProductIds, 
           <span className="truncate max-w-[200px] sm:max-w-sm text-sm" title={productName}>
             {isVersionSubmitted ? `${boqIdx + 1}. ` : ""}{productName}
           </span>
-          
+
           {!isCompactView && !isVersionSubmitted && (
             <div className="flex items-center gap-2 ml-2">
               <label className="flex items-center gap-1 text-[10px] text-blue-600 font-bold bg-white px-1.5 py-0.5 rounded border border-blue-200 shadow-sm cursor-pointer whitespace-nowrap" onClick={e => e.stopPropagation()}>
@@ -514,6 +540,17 @@ function BoqItemCard({ boqItem, boqIdx, isVersionSubmitted, expandedProductIds, 
                   } catch (err) { console.error("Failed to save is_lump_sum", err); }
                 }} />
                 Convert to LS
+              </label>
+              <label className="flex items-center gap-1 text-[10px] text-blue-700 font-bold bg-white px-1.5 py-0.5 rounded border border-blue-300 shadow-sm cursor-pointer whitespace-nowrap" onClick={e => e.stopPropagation()}>
+                <input type="checkbox" checked={useStandardRate} onChange={async (e) => {
+                  const checked = e.target.checked;
+                  try {
+                    const updatedTd = { ...tableData, use_standard_rate: checked };
+                    const resp = await apiFetch(`/api/boq-items/${boqItem.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ table_data: updatedTd }) });
+                    if (resp.ok) { setBoqItems((prev: BOMItem[]) => prev.map((i: BOMItem) => i.id === boqItem.id ? { ...i, table_data: updatedTd } : i)); }
+                  } catch (err) { console.error("Failed to toggle standard rate", err); }
+                }} />
+                Fixed Rate
               </label>
               <label className="flex items-center gap-1 text-[10px] text-rose-600 font-bold bg-white px-1.5 py-0.5 rounded border border-rose-200 shadow-sm cursor-pointer whitespace-nowrap" onClick={e => e.stopPropagation()}>
                 <input type="checkbox" checked={isProductIndicate} onChange={(e) => updateEditedField(boqItem.id, "indicate", e.target.checked)} />
@@ -546,10 +583,10 @@ function BoqItemCard({ boqItem, boqIdx, isVersionSubmitted, expandedProductIds, 
               <Button variant="outline" size="sm" className="h-6 text-[10px] px-2" disabled={isVersionSubmitted || !bomButtonsEnabled} onClick={() => handleAddItem(boqItem.id)}>+ Add Item</Button>
             )}
             <Button variant="default" size="sm" className="h-6 text-[10px] px-2 bg-green-600 hover:bg-green-700 text-white" disabled={isVersionSubmitted || tableData.is_finalized} onClick={() => handleFinalizeProduct(boqItem.id)}>Finalize</Button>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              className="h-6 text-[10px] px-2 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 font-bold" 
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 text-[10px] px-2 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 font-bold"
               onClick={() => onAnalysis(productName)}
             >
               <History className="h-3 w-3 mr-1" />
@@ -615,19 +652,21 @@ function BoqItemCard({ boqItem, boqIdx, isVersionSubmitted, expandedProductIds, 
               <div className="flex items-center gap-2">
                 <div className="flex flex-col bg-white border border-slate-200 rounded px-3 py-1 shadow-sm min-w-[100px]">
                   <span className="text-[9px] text-slate-400 font-black uppercase tracking-tight">Rate per {isLumpSum ? "LS" : (tableData.configBasis?.requiredUnitType || "Unit")}</span>
-                  <span className="text-sm font-black text-blue-700 leading-tight">₹{isLumpSum ? grandTotalValue.toLocaleString() : ratePerUnit.toLocaleString()}</span>
+                  <div className="text-sm font-black text-blue-700 leading-tight">
+                    ₹{ratePerUnit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </div>
                 </div>
                 <div className="flex flex-col bg-white border border-slate-200 rounded px-3 py-1 shadow-sm min-w-[100px]">
                   <span className="text-[9px] text-slate-400 font-black uppercase tracking-tight">Grand Total</span>
-                  <span className="text-sm font-black text-slate-900 leading-tight">₹{grandTotalValue.toLocaleString()}</span>
+                  <span className="text-sm font-black text-slate-900 leading-tight">₹{grandTotalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
               </div>
 
               <div className="flex items-center gap-1.5 flex-wrap">
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  className="h-7 text-xs bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 font-bold shadow-sm" 
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 font-bold shadow-sm"
                   onClick={() => onAnalysis(productName)}
                 >
                   <History className="h-3.5 w-3.5 mr-1" />
@@ -650,10 +689,10 @@ function BoqItemCard({ boqItem, boqIdx, isVersionSubmitted, expandedProductIds, 
                   })()}
                 </Button>
                 {!isBifProd && (
-                  <Button 
-                    variant="destructive" 
-                    size="sm" 
-                    className="h-7 w-7 p-0 bg-red-500 hover:bg-red-600 shadow-sm" 
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="h-7 w-7 p-0 bg-red-500 hover:bg-red-600 shadow-sm"
                     disabled={isVersionSubmitted}
                     onClick={async () => {
                       if (!confirm("Delete this product and all its items?")) return;
@@ -701,7 +740,7 @@ function BoqItemCard({ boqItem, boqIdx, isVersionSubmitted, expandedProductIds, 
                   </div>
                 )}
               </div>
-              
+
               <EditableHsnSac
                 tableData={tableData}
                 onUpdate={async (hsn, sac) => {
@@ -825,7 +864,14 @@ function BoqItemCard({ boqItem, boqIdx, isVersionSubmitted, expandedProductIds, 
                   <td className="border px-2 py-1 text-right">₹{totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                   <td className="border px-2 py-1"></td>
                 </tr>
-                {(() => {
+                {useStandardRate && Math.abs(roundOffAdjustment) >= 0.01 && (
+                  <tr className="text-gray-500 italic">
+                    <td colSpan={isCompactView ? 8 : 11} className="border px-2 py-1 text-right uppercase tracking-wider text-[10px]">Rounding Adjustment</td>
+                    <td className="border px-2 py-1 text-right">{roundOffAdjustment > 0 ? "+" : ""}₹{roundOffAdjustment.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className="border px-2 py-1"></td>
+                  </tr>
+                )}
+                {!useStandardRate && (() => {
                   const targetQty = calculationTarget;
                   const displayRate = Number(ratePerUnit.toFixed(2));
                   const logicalTotal = targetQty * displayRate;
@@ -1165,8 +1211,22 @@ function BoqItemRow({ item, itemIdx, boqItem, tableData, isEngineBased, isVersio
         <Input
           type="text"
           value={localUnit}
-          onChange={(e) => setLocalUnit(e.target.value)}
-          onBlur={() => { setIsFocused(false); updateEditedField(itemKey, "unit", localUnit); }}
+          onChange={(e) => {
+            const val = e.target.value;
+            setLocalUnit(val);
+            if (val.toLowerCase() === "ls") {
+              setLocalQty("1");
+              updateEditedField(itemKey, "qty", 1);
+            }
+          }}
+          onBlur={() => {
+            setIsFocused(false);
+            updateEditedField(itemKey, "unit", localUnit);
+            if (localUnit.toLowerCase() === "ls") {
+              setLocalQty("1");
+              updateEditedField(itemKey, "qty", 1);
+            }
+          }}
           className="h-7 w-12 text-xs text-center border-gray-200 focus:border-blue-400"
           disabled={isVersionSubmitted || (item.freezeAndEdit || item.freeze_and_edit)}
           onFocus={() => { setIsFocused(true); checkBudgetEarly(); }}
@@ -1177,6 +1237,11 @@ function BoqItemRow({ item, itemIdx, boqItem, tableData, isEngineBased, isVersio
           type="text"
           value={localQty}
           onChange={(e) => {
+            if (localUnit.toLowerCase() === "ls") {
+              setLocalQty("1");
+              updateEditedField(itemKey, "qty", 1);
+              return;
+            }
             const val = e.target.value;
             setLocalQty(val);
             const parsed = parseFloat(val);
@@ -1186,7 +1251,12 @@ function BoqItemRow({ item, itemIdx, boqItem, tableData, isEngineBased, isVersio
               updateEditedField(itemKey, "qty", 0);
             }
           }}
-          onBlur={() => { setIsFocused(false); updateEditedField(itemKey, "qty", parseFloat(localQty) || 0); }}
+          onBlur={() => {
+            setIsFocused(false);
+            const finalQty = localUnit.toLowerCase() === "ls" ? 1 : (parseFloat(localQty) || 0);
+            if (localUnit.toLowerCase() === "ls") setLocalQty("1");
+            updateEditedField(itemKey, "qty", finalQty);
+          }}
           className="h-7 w-16 text-xs text-center border-gray-200 focus:border-blue-400"
           disabled={isVersionSubmitted || (item.freezeAndEdit || item.freeze_and_edit)}
           onFocus={() => { setIsFocused(true); checkBudgetEarly(); }}
@@ -1680,6 +1750,7 @@ export default function CreateBom() {
   const [isCompactView, setIsCompactView] = useState(false);
   const [analysisProduct, setAnalysisProduct] = useState<string | null>(null);
   const [cardDragOverIdx, setCardDragOverIdx] = useState<number | null>(null);
+  const cardDragIdxRef = useRef<number | null>(null);
   const [bomButtonsEnabled, setBomButtonsEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
   const [materialsById, setMaterialsById] = useState<Record<string, any>>({});
@@ -1760,15 +1831,28 @@ export default function CreateBom() {
 
   const loadTemplates = useCallback(async () => {
     try {
-      const resp = await apiFetch("/api/bom-templates");
-      if (resp.ok) {
-        const data = await resp.json();
+      // Fetch BOM templates and Sketch templates in parallel
+      const [bomResp, sketchResp] = await Promise.all([
+        apiFetch("/api/bom-templates"),
+        apiFetch("/api/sketch-templates")
+      ]);
+
+      if (bomResp.ok) {
+        const data = await bomResp.json();
         setBomTemplates(data.templates || []);
       }
-      const sketchResp = await apiFetch("/api/sketch-templates");
+
       if (sketchResp.ok) {
         const sData = await sketchResp.json();
-        setSketchTemplates(sData.templates || []);
+        const parsedTemplates = (sData.templates || []).map((t: any) => {
+          let itemCount = 0;
+          try {
+            const data = typeof t.template_data === 'string' ? JSON.parse(t.template_data) : t.template_data;
+            itemCount = Array.isArray(data) ? data.length : (data?.items?.length || 0);
+          } catch (e) { /* ignore */ }
+          return { ...t, itemCount };
+        });
+        setSketchTemplates(parsedTemplates);
       }
     } catch (e) {
       console.error("Failed to load templates:", e);
@@ -2975,7 +3059,13 @@ export default function CreateBom() {
       if (configRes.ok) {
         const { config, items } = await configRes.json();
         if (config) {
-          configBasis = { requiredUnitType: config.required_unit_type as UnitType, baseRequiredQty: Math.max(0.001, Number(config.base_required_qty || 100)), wastagePctDefault: Number(config.wastage_pct_default || 0) };
+          const savedTotalCost = Number(config.total_cost || 0);
+          configBasis = {
+            requiredUnitType: config.required_unit_type as UnitType,
+            baseRequiredQty: Math.max(0.001, Number(config.base_required_qty || 100)),
+            wastagePctDefault: Number(config.wastage_pct_default || 0),
+            total_cost: savedTotalCost // Store it in configBasis for easier access
+          };
           materialLines = (items || []).map((item: any) => ({
             id: item.material_id,
             name: item.material_name,
@@ -2994,7 +3084,25 @@ export default function CreateBom() {
         configBasis = { requiredUnitType: "Sqft" as UnitType, baseRequiredQty: 1, wastagePctDefault: 0 };
         materialLines = pendingItems.map(i => ({ materialId: i.id || Math.random().toString(), materialName: i.title || "Item", unit: i.unit || "nos", baseQty: i.qty || 1, supplyRate: i.supply_rate || 0, installRate: i.install_rate || 0, category: i.category || "General" }));
       }
-      const tableData = { product_name: selectedProduct.name, product_id: selectedProduct.id, image: selectedProduct.image, category: selectedProduct.category || "General", category_name: selectedProduct.category || "General", subcategory: selectedProduct.subcategory, hsn_sac_type: selectedProduct.tax_code_type || null, hsn_sac_code: selectedProduct.tax_code_value || null, hsn_code: selectedProduct.hsn_code || null, sac_code: selectedProduct.sac_code || null, targetRequiredQty, configBasis, materialLines, step11_items: pendingItems.map(i => ({ ...i, category: i.category || "General" })), finalize_description: pendingItems[0]?.description || "", created_at: new Date().toISOString() };
+      const tableData = {
+        product_name: selectedProduct.name,
+        product_id: selectedProduct.id,
+        image: selectedProduct.image,
+        category: selectedProduct.category || "General",
+        category_name: selectedProduct.category || "General",
+        subcategory: selectedProduct.subcategory,
+        hsn_sac_type: selectedProduct.tax_code_type || null,
+        hsn_sac_code: selectedProduct.tax_code_value || null,
+        hsn_code: selectedProduct.hsn_code || null,
+        sac_code: selectedProduct.sac_code || null,
+        targetRequiredQty,
+        configBasis,
+        total_cost: configBasis?.total_cost || 0,
+        materialLines,
+        step11_items: pendingItems.map(i => ({ ...i, category: i.category || "General" })),
+        finalize_description: pendingItems[0]?.description || "",
+        created_at: new Date().toISOString()
+      };
 
       // --- NEW: Check for Material Quantity Increases in Approved POs ---
       const materialIds = materialLines.map(ml => ml.id || ml.materialId).filter(Boolean);
@@ -4303,42 +4411,42 @@ export default function CreateBom() {
                       </div>
                     </div>
                     <div className="pt-6">
-                    {boqItems.length === 0
-                      ? <div className="text-gray-500 text-center py-4">No products added yet. Click Add Product +</div>
-                      : <div className="space-y-6">
-                        {boqItems
-                          .filter(item => {
-                            const td = parseTableData(item.table_data);
-                            const name = td.product_name || item.estimator || "";
-                            const desc = td.finalize_description || "";
-                            const matchesSearch = fuzzySearch(productSearch, [name, desc]);
-                            const isStandaloneItem = !td.product_id;
+                      {boqItems.length === 0
+                        ? <div className="text-gray-500 text-center py-4">No products added yet. Click Add Product +</div>
+                        : <div className="space-y-6">
+                          {boqItems
+                            .filter(item => {
+                              const td = parseTableData(item.table_data);
+                              const name = td.product_name || item.estimator || "";
+                              const desc = td.finalize_description || "";
+                              const matchesSearch = fuzzySearch(productSearch, [name, desc]);
+                              const isStandaloneItem = !td.product_id;
 
-                            // Standalone items (Add Item, no product_id) should never appear when
-                            // a real product category filter is active.
-                            if (productCategoryFilter !== "all" && isStandaloneItem) return false;
+                              // Standalone items (Add Item, no product_id) should never appear when
+                              // a real product category filter is active.
+                              if (productCategoryFilter !== "all" && isStandaloneItem) return false;
 
-                            const cat = td.category_name || td.category || "General";
-                            const matchesProductCat = productCategoryFilter === "all" || cat === productCategoryFilter;
+                              const cat = td.category_name || td.category || "General";
+                              const matchesProductCat = productCategoryFilter === "all" || cat === productCategoryFilter;
 
-                            // Item category filter logic
-                            let hasMatchingItem = true;
-                            if (itemCategoryFilter !== "all") {
-                              if (isStandaloneItem) {
-                                // For standalone items, match by their own top-level category
-                                hasMatchingItem = cat === itemCategoryFilter;
-                              } else {
-                                const materialLines = td.materialLines || [];
-                                const step11Items = td.step11_items || [];
-                                hasMatchingItem = materialLines.some((ml: any) => (ml.category || "General") === itemCategoryFilter) ||
-                                  step11Items.some((si: any) => (si.category || "General") === itemCategoryFilter);
+                              // Item category filter logic
+                              let hasMatchingItem = true;
+                              if (itemCategoryFilter !== "all") {
+                                if (isStandaloneItem) {
+                                  // For standalone items, match by their own top-level category
+                                  hasMatchingItem = cat === itemCategoryFilter;
+                                } else {
+                                  const materialLines = td.materialLines || [];
+                                  const step11Items = td.step11_items || [];
+                                  hasMatchingItem = materialLines.some((ml: any) => (ml.category || "General") === itemCategoryFilter) ||
+                                    step11Items.some((si: any) => (si.category || "General") === itemCategoryFilter);
+                                }
                               }
-                            }
 
-                            return matchesSearch && matchesProductCat && hasMatchingItem;
-                          })
-                          .map((boqItem: BOMItem, boqIdx: number) => (
-                            <div key={boqItem.id} id={`boq-item-card-${boqItem.id}`} className="transition-all duration-300">
+                              return matchesSearch && matchesProductCat && hasMatchingItem;
+                            })
+                            .map((boqItem: BOMItem, boqIdx: number) => (
+                              <div key={boqItem.id} id={`boq-item-card-${boqItem.id}`} className="transition-all duration-300">
                                 <BoqItemCard boqItem={boqItem} boqIdx={boqIdx} isVersionSubmitted={isVersionSubmitted}
                                   expandedProductIds={expandedProductIds} setExpandedProductIds={setExpandedProductIds}
                                   getEditedValue={getEditedValue} updateEditedField={updateEditedField}
@@ -4346,56 +4454,56 @@ export default function CreateBom() {
                                   handleAddItem={handleAddItem} loadBoqItemsAndEdits={loadBoqItemsAndEdits} setBoqItems={setBoqItems}
                                   checkBudgetEarly={checkBudgetEarly} handleSaveProject={handleSaveProject}
                                   onAnalysis={(name) => setAnalysisProduct(name)}
-                                isCardDragOver={cardDragOverIdx === boqIdx}
-                                onCardDragStart={(e) => { cardDragIdxRef.current = boqIdx; e.dataTransfer.effectAllowed = 'move'; }}
-                                onCardDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setCardDragOverIdx(boqIdx); }}
-                                onCardDrop={(e) => {
-                                  e.preventDefault();
-                                  setCardDragOverIdx(null);
-                                  const fromIdx = cardDragIdxRef.current;
-                                  if (fromIdx === null || fromIdx === boqIdx) return;
-                                  const reordered = [...boqItems];
-                                  const [moved] = reordered.splice(fromIdx, 1);
-                                  reordered.splice(boqIdx, 0, moved);
-                                  setBoqItems(reordered);
-                                  // Persist the new order
-                                  apiFetch('/api/boq-items/reorder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemIds: reordered.map(i => i.id) }) }).catch(console.error);
-                                  cardDragIdxRef.current = null;
-                                }}
-                                mismatches={activeMismatches.filter(m => m.boqItemId === boqItem.id)}
-                                isCompactView={isCompactView}
-                                onSaveAsTemplate={(item) => {
-                                  setTemplateToSave(item);
-                                  setNewTemplateName(parseTableData(item.table_data).product_name || item.estimator);
-                                  setShowSaveTemplateDialog(true);
-                                }}
-                                editedFields={editedFields}
-                                comments={comments}
-                                users={users}
-                                currentUser={user}
-                                onAddComment={(versionId: string, itemId?: string) => {
-                                  const productName = parseTableData(boqItem.table_data).product_name || boqItem.estimator;
-                                  setCommentTarget({ type: itemId ? 'item' : 'product', id: itemId || boqItem.id, name: itemId ? `${productName} - Item ${itemId}` : productName });
-                                  setShowCommentDialog(true);
-                                }}
-                                selectedVersionId={selectedVersionId}
-                                totalProducts={boqItems.length}
-                                itemCategoryFilter={itemCategoryFilter}
-                                bomButtonsEnabled={bomButtonsEnabled}
-                                onProductOrdinalChange={(toIdx) => {
-                                  if (toIdx === boqIdx) return;
-                                  const reordered = [...boqItems];
-                                  const [moved] = reordered.splice(boqIdx, 1);
-                                  reordered.splice(toIdx, 0, moved);
-                                  setBoqItems(reordered);
-                                  // Persist the new order
-                                  apiFetch('/api/boq-items/reorder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemIds: reordered.map(i => i.id) }) }).catch(console.error);
-                                }}
-                              />
-                            </div>
-                          ))}
-                      </div>
-                    }
+                                  isCardDragOver={cardDragOverIdx === boqIdx}
+                                  onCardDragStart={(e) => { cardDragIdxRef.current = boqIdx; e.dataTransfer.effectAllowed = 'move'; }}
+                                  onCardDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setCardDragOverIdx(boqIdx); }}
+                                  onCardDrop={(e) => {
+                                    e.preventDefault();
+                                    setCardDragOverIdx(null);
+                                    const fromIdx = cardDragIdxRef.current;
+                                    if (fromIdx === null || fromIdx === boqIdx) return;
+                                    const reordered = [...boqItems];
+                                    const [moved] = reordered.splice(fromIdx, 1);
+                                    reordered.splice(boqIdx, 0, moved);
+                                    setBoqItems(reordered);
+                                    // Persist the new order
+                                    apiFetch('/api/boq-items/reorder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemIds: reordered.map(i => i.id) }) }).catch(console.error);
+                                    cardDragIdxRef.current = null;
+                                  }}
+                                  mismatches={activeMismatches.filter(m => m.boqItemId === boqItem.id)}
+                                  isCompactView={isCompactView}
+                                  onSaveAsTemplate={(item) => {
+                                    setTemplateToSave(item);
+                                    setNewTemplateName(parseTableData(item.table_data).product_name || item.estimator);
+                                    setShowSaveTemplateDialog(true);
+                                  }}
+                                  editedFields={editedFields}
+                                  comments={comments}
+                                  users={users}
+                                  currentUser={user}
+                                  onAddComment={(versionId: string, itemId?: string) => {
+                                    const productName = parseTableData(boqItem.table_data).product_name || boqItem.estimator;
+                                    setCommentTarget({ type: itemId ? 'item' : 'product', id: itemId || boqItem.id, name: itemId ? `${productName} - Item ${itemId}` : productName });
+                                    setShowCommentDialog(true);
+                                  }}
+                                  selectedVersionId={selectedVersionId}
+                                  totalProducts={boqItems.length}
+                                  itemCategoryFilter={itemCategoryFilter}
+                                  bomButtonsEnabled={bomButtonsEnabled}
+                                  onProductOrdinalChange={(toIdx) => {
+                                    if (toIdx === boqIdx) return;
+                                    const reordered = [...boqItems];
+                                    const [moved] = reordered.splice(boqIdx, 1);
+                                    reordered.splice(toIdx, 0, moved);
+                                    setBoqItems(reordered);
+                                    // Persist the new order
+                                    apiFetch('/api/boq-items/reorder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemIds: reordered.map(i => i.id) }) }).catch(console.error);
+                                  }}
+                                />
+                              </div>
+                            ))}
+                        </div>
+                      }
                     </div>
                   </CardContent>
                 </Card>
@@ -4676,11 +4784,7 @@ export default function CreateBom() {
                       {sketchTemplates
                         .filter(t => fuzzySearch(templateSearch, [t.name]))
                         .map((template) => {
-                          let itemCount = 0;
-                          try {
-                            const data = typeof template.template_data === 'string' ? JSON.parse(template.template_data) : template.template_data;
-                            itemCount = Array.isArray(data) ? data.length : (data?.items?.length || 0);
-                          } catch (e) { /* ignore */ }
+                          const itemCount = template.itemCount || 0;
 
                           return (
                             <div key={template.id} className="flex items-center justify-between p-3 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
@@ -5165,10 +5269,10 @@ export default function CreateBom() {
         onAction={handleApprovalAction}
         actionLoading={approvalActionLoading}
       />
-      <ProductAnalysisDialog 
-        productName={analysisProduct || ""} 
-        isOpen={!!analysisProduct} 
-        onClose={() => setAnalysisProduct(null)} 
+      <ProductAnalysisDialog
+        productName={analysisProduct || ""}
+        isOpen={!!analysisProduct}
+        onClose={() => setAnalysisProduct(null)}
       />
     </>
   );

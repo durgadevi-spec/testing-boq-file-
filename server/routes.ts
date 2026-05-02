@@ -10595,6 +10595,89 @@ ${list.rows.map((row: any) => `- ${row.name}`).join('\n')}`;
     }
   });
 
+  // GET /api/historical-rates - Fetch historical Supply and Labour rates for a specific product
+  app.get("/api/historical-rates", authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const { productId } = req.query;
+      if (!productId) {
+        return res.status(400).json({ message: "productId is required" });
+      }
+
+      console.log(`[DEBUG] Fetching historical rates for productId: ${productId}`);
+
+      // Fetch last 100 projects where this product was used
+      // We look in table_data JSON for product_id or material_id
+      const result = await query(`
+        SELECT 
+          p.name as project_name, 
+          v.updated_at as date, 
+          v.status as version_status,
+          bi.table_data
+        FROM boq_items bi
+        JOIN boq_versions v ON bi.version_id = v.id
+        JOIN boq_projects p ON v.project_id = p.id
+        WHERE v.type = 'boq'
+          AND (bi.table_data->>'product_id' = $1 OR bi.table_data->>'material_id' = $1)
+        ORDER BY v.updated_at DESC
+        LIMIT 100
+      `, [productId]);
+
+      console.log(`[DEBUG] Found ${result.rows.length} projects for this product`);
+
+      const history = result.rows.map(row => {
+        let td = row.table_data;
+        if (typeof td === 'string') {
+          try { td = JSON.parse(td); } catch (e) { td = {}; }
+        }
+        
+        const cols = td.finalize_columns || [];
+        const vals = td.finalize_column_values?.['0'] || {};
+        
+        let supplyRate = null;
+        let labourRate = null;
+
+        // Requirement: Fetch EXACT stored values from custom columns
+        cols.forEach((col: any) => {
+          const colName = typeof col === 'string' ? col : col.name;
+          const lower = colName.toLowerCase();
+          const val = vals[colName];
+          
+          if (val !== undefined && val !== null && val !== "") {
+            const parsedVal = typeof val === 'string' ? parseFloat(val.replace(/,/g, '')) : parseFloat(val);
+            if (isNaN(parsedVal) || parsedVal <= 0) return;
+
+            // Supply Rate match
+            if (lower.includes("supply") && lower.includes("rate")) {
+              supplyRate = parsedVal;
+            } 
+            // Labour/Install Rate match
+            else if ((lower.includes("labour") || lower.includes("labor") || lower.includes("install")) && lower.includes("rate")) {
+              labourRate = parsedVal;
+            }
+          }
+        });
+
+        if (supplyRate === null && labourRate === null) return null;
+
+        return {
+          projectName: row.project_name,
+          date: row.date,
+          versionStatus: row.version_status,
+          supplyRate,
+          labourRate,
+          qty: td.finalize_qty || null,
+          total: td.finalize_override_total || null
+        };
+      }).filter(Boolean);
+
+      console.log(`[DEBUG] Returning ${history.length} historical entries after filtering`);
+      res.json({ history });
+    } catch (err) {
+      console.error("GET /api/historical-rates error", err);
+      res.status(500).json({ message: "Failed to fetch historical rates" });
+    }
+  });
+
   return httpServer;
 }
 

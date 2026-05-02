@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, Trash2, Save, ArrowLeft, Camera, Pencil, Layers, X, GripVertical, FileText, Search, MessageSquare, Image as ImageIcon, Move, Lock, Unlock, ShieldAlert, Cloud, Check, AlertTriangle, FileUp, FileSpreadsheet, Download, Paperclip, ArrowUp, ArrowDown, ArrowUpToLine, ArrowDownToLine, GitBranch, Store, ChevronDown, ArrowUpDown, ArrowDownAz, Users, Copy } from "lucide-react";
+import { Plus, Trash2, Save, ArrowLeft, Camera, Pencil, Layers, X, GripVertical, FileText, Search, MessageSquare, Image as ImageIcon, Move, Lock, Unlock, ShieldAlert, Cloud, Check, AlertCircle, AlertTriangle, FileUp, FileSpreadsheet, Download, Paperclip, ArrowUp, ArrowDown, ArrowUpToLine, ArrowDownToLine, GitBranch, Store, ChevronDown, ChevronLeft, ChevronRight, ArrowUpDown, ArrowDownAz, Users, Copy } from "lucide-react";
 import { Reorder, useDragControls } from "framer-motion";
 import { SketchPad } from "@/components/SketchPad";
 import apiFetch from "@/lib/api";
@@ -25,6 +25,16 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/lib/auth-context";
 import { SupplierLayout } from "@/components/layout/SupplierLayout";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
 interface PlanImage {
   id?: string;
@@ -208,7 +218,7 @@ const PhotoColumn = ({
 };
 
 // Row Component for Drag and Drop
-const SketchPlanRow = ({
+const SketchPlanRow = React.memo(({
   item, idx, itemsLength, updateItem, setOpenNotesIdx, removeItem, moveItemToPosition, selectMaterial,
   searchResults, searching, loadMaterials, materialSearch, setMaterialSearch,
   openPopoverIdx, setOpenPopoverIdx, renameRowImage, removeRowImage,
@@ -440,7 +450,7 @@ const SketchPlanRow = ({
           }
         }}>
           <DialogTrigger asChild>
-            <Button variant="outline" size="sm" className={cn("w-full justify-start text-left font-normal border-dashed border-slate-300 hover:border-indigo-400 p-1", isLocked && "pointer-events-none", isCompact ? "h-6 text-[9px]" : "h-8 text-[11px]")} disabled={isLocked}>
+            <Button variant="outline" size="sm" className={cn("w-full justify-start text-left font-normal border-dashed border-slate-300 hover:border-indigo-400 p-1", isLocked && "pointer-events-auto hover:bg-transparent", isCompact ? "h-6 text-[9px]" : "h-8 text-[11px]")} disabled={isLocked}>
               {item.item_name ? (
                 <span className={cn("truncate", isCompact ? "max-w-[80px]" : "max-w-[120px]")}>{item.item_name}</span>
               ) : (
@@ -737,7 +747,7 @@ const SketchPlanRow = ({
       </td>
     </Reorder.Item>
   );
-};
+});
 
 export default function CreateSketchPlan() {
   const { id: paramId } = useParams<{ id?: string }>();
@@ -773,6 +783,8 @@ export default function CreateSketchPlan() {
   const [sendingEmail, setSendingEmail] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
   const [isCompact, setIsCompact] = useState(false);
   const [sortBy, setSortBy] = useState<string>("none");
 
@@ -799,11 +811,15 @@ export default function CreateSketchPlan() {
   const [previewImage, setPreviewImage] = useState<{ url: string, name: string } | null>(null);
   const [sketchInitialData, setSketchInitialData] = useState<string | undefined>(undefined);
   const lastSketchItemIdxRef = useRef<number | null>(null); // To track which image we are "continously" auto-saving
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, categoryFilter]);
   const lastSketchPlanImgIdxRef = useRef<number | null>(null);
   const [sketchDialogOpen, setSketchDialogOpen] = useState(false);
-  const [autoSaveStatus, setAutoSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const lastSavedRef = useRef<string>("");
   const isSavingRef = useRef<boolean>(false);
+  const [initialLoading, setInitialLoading] = useState(!!paramId);
 
   // Lock & Approval State
   const [isLocked, setIsLocked] = useState(false);
@@ -1050,156 +1066,163 @@ export default function CreateSketchPlan() {
     }
   };
 
-  const handleSort = (criteria: string) => {
+  const handleSort = useCallback((criteria: string) => {
     setSortBy(criteria);
     if (criteria === "none") return;
 
-    const sorted = [...items].sort((a, b) => {
-      switch (criteria) {
-        case "name-asc":
-          return (a.item_name || "").trim().localeCompare((b.item_name || "").trim());
-        case "name-desc":
-          return (b.item_name || "").trim().localeCompare((a.item_name || "").trim());
-        case "qty-asc":
-          return (Number(a.qty) || 0) - (Number(b.qty) || 0);
-        case "qty-desc":
-          return (Number(b.qty) || 0) - (Number(a.qty) || 0);
-        case "category-asc":
-          return (a.category || "").trim().localeCompare((b.category || "").trim());
-        case "category-desc":
-          return (b.category || "").trim().localeCompare((a.category || "").trim());
-        case "notes-asc":
-          return (a.description || "").trim().localeCompare((b.description || "").trim());
-        case "notes-desc":
-          return (b.description || "").trim().localeCompare((a.description || "").trim());
-        case "vendor-asc":
-          return (a.vendor_name || "").localeCompare(b.vendor_name || "");
-        case "vendor-desc":
-          return (b.vendor_name || "").localeCompare(a.vendor_name || "");
-        default:
-          return 0;
-      }
+    setItems(prevItems => {
+      const sorted = [...prevItems].sort((a, b) => {
+        switch (criteria) {
+          case "name-asc":
+            return (a.item_name || "").trim().localeCompare((b.item_name || "").trim());
+          case "name-desc":
+            return (b.item_name || "").trim().localeCompare((a.item_name || "").trim());
+          case "qty-asc":
+            return (Number(a.qty) || 0) - (Number(b.qty) || 0);
+          case "qty-desc":
+            return (Number(b.qty) || 0) - (Number(a.qty) || 0);
+          case "category-asc":
+            return (a.category || "").trim().localeCompare((b.category || "").trim());
+          case "category-desc":
+            return (b.category || "").trim().localeCompare((a.category || "").trim());
+          case "notes-asc":
+            return (a.description || "").trim().localeCompare((b.description || "").trim());
+          case "notes-desc":
+            return (b.description || "").trim().localeCompare((a.description || "").trim());
+          case "vendor-asc":
+            return (a.vendor_name || "").localeCompare(b.vendor_name || "");
+          case "vendor-desc":
+            return (b.vendor_name || "").localeCompare(a.vendor_name || "");
+          default:
+            return 0;
+        }
+      });
+      return sorted;
     });
-    setItems(sorted);
-  };
+  }, []);
 
   // Load initial data
   useEffect(() => {
     const loadInitialData = async () => {
-      // Load Categories
+      setInitialLoading(true);
       try {
-        const catRes = await apiFetch("/api/categories");
-        if (catRes.ok) {
+        const fetchPromises = [
+          apiFetch("/api/categories"),
+          !isSupplier ? apiFetch("/api/boq-projects") : Promise.resolve(null),
+          paramId ? apiFetch(`/api/sketch-plans/${paramId}`) : Promise.resolve(null)
+        ];
+
+        const [catRes, projectsRes, planRes] = await Promise.all(fetchPromises);
+
+        if (catRes && catRes.ok) {
           const catData = await catRes.json();
           setCategories(catData.categories || []);
         }
-      } catch (e) {
-        console.error("Failed to load categories", e);
-      }
 
-      try {
-        if (!isSupplier) {
-          const projectsRes = await apiFetch("/api/boq-projects");
-          if (projectsRes.ok) {
-            const data = await projectsRes.json();
-            setProjects(data.projects || []);
-          }
+        if (projectsRes && projectsRes.ok) {
+          const data = await projectsRes.json();
+          setProjects(data.projects || []);
         }
 
-        if (paramId) {
-          const planRes = await apiFetch(`/api/sketch-plans/${paramId}`);
-          if (planRes.ok) {
-            const data = await planRes.json();
-            const p = data.plan;
-            setName(p.name || "");
-            setProjectId(p.project_id || "none");
-            setProjectName(p.project_name || "");
-            setLocationStr(p.location || "");
-            if (p.plan_date) setPlanDate(new Date(p.plan_date).toISOString().split("T")[0]);
+        if (planRes && planRes.ok) {
+          const data = await planRes.json();
+          const p = data.plan;
+          setName(p.name || "");
+          setProjectId(p.project_id || "none");
+          setProjectName(p.project_name || "");
+          setLocationStr(p.location || "");
+          if (p.plan_date) setPlanDate(new Date(p.plan_date).toISOString().split("T")[0]);
 
+          // Lock Info
+          setIsLocked(!!p.is_locked);
+          setRequestStatus(p.request_status || "none");
+          setRequestReason(p.request_reason || "");
 
-            // Lock Info
-            setIsLocked(!!p.is_locked);
-            setRequestStatus(p.request_status || "none");
-            setRequestReason(p.request_reason || "");
-
-            // Map items and their images
-            // Map items and their images with unique ID filtering
-            const seenIds = new Set();
-            const mappedItems = data.items
-              .filter((it: any) => {
-                if (!it.id || seenIds.has(it.id)) return false;
-                seenIds.add(it.id);
-                return true;
-              })
-              .map((it: any) => {
-                const itemImages = data.images.filter((img: any) => img.item_id === it.id);
-                const preImages: PlanImage[] = [];
-                const postImages: PlanImage[] = [];
-
-                itemImages.forEach((img: any) => {
-                  const cleanedName = (img.image_name || img.name || "").replace(/^(PRE_|POST_)/, "");
-                  const mappedImg = {
-                    id: img.id,
-                    url: img.image_url,
-                    name: cleanedName || `Photo ${img.id.split('-').pop()}`
-                  };
-
-                  if ((img.image_name || img.name || "").startsWith("POST_")) {
-                    postImages.push(mappedImg);
-                  } else {
-                    preImages.push(mappedImg);
-                  }
-                });
-
-                return { ...it, preImages, postImages, images: [] };
-              });
-
-            if (mappedItems.length > 0) {
-              setItems(mappedItems);
-            } else {
-              // If no items, provide exactly one fresh empty row
-              setItems([{
-                id: `ski-${Date.now()}`,
-                item_name: "", description: "", length: "", width: "", height: "", qty: "1",
-                unit: "Nos", dimension_unit: "feet", category: "", remarks: "",
-                preImages: [], postImages: [], images: []
-              }]);
-            }
-
-            // Plan-level images
-            const plImages = data.images
-              .filter((img: any) => !img.item_id)
-              .map((img: any) => ({
-                id: img.id,
-                url: img.image_url,
-                name: img.image_name || img.name || `Site Photo ${img.id.split('-').pop()}`
-              }));
-            setPlanImages(plImages);
-
-            // Attachments
-            if (data.attachments && Array.isArray(data.attachments)) {
-              const mappedAtts: PlanAttachment[] = data.attachments.map((att: any) => ({
-                id: att.id,
-                url: att.file_url,
-                name: att.file_name,
-                type: att.file_type as any
-              }));
-              setAttachments(mappedAtts);
-            }
-
-            // Initialize lastSavedRef to prevent redundant save on mount
-            lastSavedRef.current = JSON.stringify({
-              name: p.name || "",
-              project_id: p.project_id || "none",
-              location: p.location || "",
-              plan_date: p.plan_date ? new Date(p.plan_date).toISOString().split("T")[0] : new Date().toISOString().split("T")[0],
-              items: mappedItems,
-              images: plImages.map((img: any) => ({ item_id: null, image_url: img.url, name: img.name })),
-              attachments: data.attachments || []
+          // Optimize image mapping using a Map for O(1) lookup
+          const imagesByItemId = new Map<string, any[]>();
+          if (data.images && Array.isArray(data.images)) {
+            data.images.forEach((img: any) => {
+              if (img.item_id) {
+                if (!imagesByItemId.has(img.item_id)) imagesByItemId.set(img.item_id, []);
+                imagesByItemId.get(img.item_id)?.push(img);
+              }
             });
           }
-        } else {
+
+          // Map items and their images
+          const seenIds = new Set();
+          const mappedItems = (data.items || [])
+            .filter((it: any) => {
+              if (!it.id || seenIds.has(it.id)) return false;
+              seenIds.add(it.id);
+              return true;
+            })
+            .map((it: any) => {
+              const itemImages = imagesByItemId.get(it.id) || [];
+              const preImages: PlanImage[] = [];
+              const postImages: PlanImage[] = [];
+
+              itemImages.forEach((img: any) => {
+                const cleanedName = (img.image_name || img.name || "").replace(/^(PRE_|POST_)/, "");
+                const mappedImg = {
+                  id: img.id,
+                  url: img.image_url,
+                  name: cleanedName || `Photo ${img.id.split('-').pop()}`
+                };
+
+                if ((img.image_name || img.name || "").startsWith("POST_")) {
+                  postImages.push(mappedImg);
+                } else {
+                  preImages.push(mappedImg);
+                }
+              });
+
+              return { ...it, preImages, postImages, images: [] };
+            });
+
+          if (mappedItems.length > 0) {
+            setItems(mappedItems);
+          } else {
+            setItems([{
+              id: `ski-${Date.now()}`,
+              item_name: "", description: "", length: "", width: "", height: "", qty: "1",
+              unit: "Nos", dimension_unit: "feet", category: "", remarks: "",
+              preImages: [], postImages: [], images: []
+            }]);
+          }
+
+          // Plan-level images
+          const plImages = (data.images || [])
+            .filter((img: any) => !img.item_id)
+            .map((img: any) => ({
+              id: img.id,
+              url: img.image_url,
+              name: img.image_name || img.name || `Site Photo ${img.id.split('-').pop()}`
+            }));
+          setPlanImages(plImages);
+
+          // Attachments
+          if (data.attachments && Array.isArray(data.attachments)) {
+            const mappedAtts: PlanAttachment[] = data.attachments.map((att: any) => ({
+              id: att.id,
+              url: att.file_url,
+              name: att.file_name,
+              type: att.file_type as any
+            }));
+            setAttachments(mappedAtts);
+          }
+
+          // Initialize lastSavedRef
+          lastSavedRef.current = JSON.stringify({
+            name: p.name || "",
+            project_id: p.project_id || "none",
+            location: p.location || "",
+            plan_date: p.plan_date ? new Date(p.plan_date).toISOString().split("T")[0] : new Date().toISOString().split("T")[0],
+            items: mappedItems,
+            images: plImages.map((img: any) => ({ item_id: null, image_url: img.url, name: img.name })),
+            attachments: data.attachments || []
+          });
+        } else if (!paramId) {
           const templateDataStr = sessionStorage.getItem("sketch_template_data");
           if (templateDataStr) {
             try {
@@ -1215,6 +1238,8 @@ export default function CreateSketchPlan() {
         }
       } catch (err) {
         console.error("Failed to load initial data", err);
+      } finally {
+        setInitialLoading(false);
       }
     };
 
@@ -1223,34 +1248,33 @@ export default function CreateSketchPlan() {
   // Only run when URL parameter changes
 
   // Load sibling versions for this plan
-  const loadSiblingVersions = useCallback(async (planId: string) => {
+  const loadSiblingVersions = useCallback(async (p: any) => {
     try {
-      const res = await apiFetch("/api/sketch-plans");
+      const rootId = p.parent_plan_id || p.id;
+      if (!rootId) return;
+
+      const res = await apiFetch(`/api/sketch-plans?parent_id=${rootId}`);
       if (!res.ok) return;
       const data = await res.json();
-      const allPlans: any[] = data.plans || [];
+      const siblings = (data.plans || []).sort((a: any, b: any) => (a.version_number || 1) - (b.version_number || 1));
 
-      // Find the current plan to get its root
-      const currentPlan = allPlans.find(p => p.id === planId);
-      if (!currentPlan) return;
-
-      setCurrentVersionNumber(currentPlan.version_number || 1);
-
-      const rootId = currentPlan.parent_plan_id || planId;
-      // Get all siblings: same root or is the root
-      const siblings = allPlans
-        .filter(p => (p.id === rootId || p.parent_plan_id === rootId))
-        .sort((a, b) => (a.version_number || 1) - (b.version_number || 1));
-
-      setSiblingVersions(siblings.length > 0 ? siblings : [currentPlan]);
+      setSiblingVersions(siblings.length > 0 ? siblings : [p]);
+      setCurrentVersionNumber(p.version_number || 1);
     } catch (e) {
       console.error("loadSiblingVersions error", e);
     }
   }, []);
 
   useEffect(() => {
-    if (currentId) loadSiblingVersions(currentId);
-  }, [currentId, loadSiblingVersions]);
+    // This is now partially handled in loadInitialData for the initial load,
+    // but we keep this for when currentId changes (e.g. after save)
+    const currentPlan = siblingVersions.find(v => v.id === currentId);
+    if (currentId && !currentPlan) {
+      // If we don't have the plan object, we can't easily find siblings without rootId
+      // In that case, we might need to fetch the plan details first, but usually 
+      // loadInitialData handles this.
+    }
+  }, [currentId, siblingVersions]);
 
   const handleCreateNewVersion = async (copyItems: boolean) => {
     if (!currentId) return;
@@ -1309,51 +1333,57 @@ export default function CreateSketchPlan() {
     return () => clearTimeout(timer);
   }, [materialSearch, openPopoverIdx, loadMaterials]);
 
-  const addItem = () => {
+  const addItem = useCallback(() => {
     // Clear filters to ensure the new item is visible
     setSearchTerm("");
     setCategoryFilter("all");
-    if (sortBy !== "none") setSortBy("none");
+    setSortBy("none");
 
-    setItems([
-      ...items,
+    setItems(prev => [
+      ...prev,
       { id: `ski-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`, item_name: "", description: "", length: "", width: "", height: "", qty: "1", unit: "Nos", dimension_unit: "feet", remarks: "", preImages: [], postImages: [], images: [] }
     ]);
-  };
+  }, []);
 
-  const removeItem = (idx: number) => {
-    if (items.length === 1) return;
-    const newItems = [...items];
-    newItems.splice(idx, 1);
-    setItems(newItems);
-    if (sortBy !== "none") setSortBy("none");
-  };
+  const removeItem = useCallback((idx: number) => {
+    setItems(prev => {
+      if (prev.length === 1) return prev;
+      const next = [...prev];
+      next.splice(idx, 1);
+      return next;
+    });
+    setSortBy("none");
+  }, []);
 
-  const cloneItem = (idx: number) => {
-    const itemToClone = items[idx];
-    const clonedItem: PlanItem = {
-      ...JSON.parse(JSON.stringify(itemToClone)),
-      id: `ski-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-      // Reset image IDs for the clone so they are treated as new uploads if saved
-      preImages: (itemToClone.preImages || []).map(img => ({ ...img, id: undefined })),
-      postImages: (itemToClone.postImages || []).map(img => ({ ...img, id: undefined }))
-    };
+  const cloneItem = useCallback((idx: number) => {
+    setItems(prev => {
+      const itemToClone = prev[idx];
+      const clonedItem: PlanItem = {
+        ...JSON.parse(JSON.stringify(itemToClone)),
+        id: `ski-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        // Reset image IDs for the clone so they are treated as new uploads if saved
+        preImages: (itemToClone.preImages || []).map(img => ({ ...img, id: undefined })),
+        postImages: (itemToClone.postImages || []).map(img => ({ ...img, id: undefined }))
+      };
 
-    const newItems = [...items];
-    newItems.splice(idx + 1, 0, clonedItem);
-    setItems(newItems);
-    if (sortBy !== "none") setSortBy("none");
-    toast({ title: "Row Cloned", description: `Successfully duplicated ${itemToClone.item_name || 'item'}` });
-  };
+      const next = [...prev];
+      next.splice(idx + 1, 0, clonedItem);
+      return next;
+    });
+    setSortBy("none");
+    toast({ title: "Row Cloned", description: `Successfully duplicated item` });
+  }, [toast]);
 
-  const moveItemToPosition = (fromIdx: number, toIdx: number) => {
-    if (fromIdx === toIdx || items.length <= 1) return;
-    const newItems = [...items];
-    const item = newItems.splice(fromIdx, 1)[0];
-    newItems.splice(toIdx, 0, item);
-    setItems(newItems);
-    if (sortBy !== "none") setSortBy("none");
-  };
+  const moveItemToPosition = useCallback((fromIdx: number, toIdx: number) => {
+    setItems(prev => {
+      if (fromIdx === toIdx || prev.length <= 1) return prev;
+      const next = [...prev];
+      const item = next.splice(fromIdx, 1)[0];
+      next.splice(toIdx, 0, item);
+      return next;
+    });
+    setSortBy("none");
+  }, []);
 
   const addDimension = useCallback((itemIdx: number) => {
     setItems((prevItems) => {
@@ -1376,17 +1406,21 @@ export default function CreateSketchPlan() {
       dims.splice(dimIdx, 1);
       item.dimensions = dims;
 
-      let totalQty = 0;
-      dims.forEach(d => {
-        const l = parseFloat(d.length) || 0;
-        const w = parseFloat(d.width) || 0;
-        const h = parseFloat(d.height) || 0;
-        if (l > 0 || w > 0 || h > 0) {
-          const p = [l, w, h].filter(v => v > 0);
-          totalQty += p.reduce((acc, v) => acc * v, 1);
-        }
-      });
-      item.qty = item.dimension_unit === "mm" ? Math.round(totalQty).toString() : totalQty.toFixed(2);
+      if (item.dimension_unit === "ls") {
+        item.qty = "1";
+      } else {
+        let totalQty = 0;
+        dims.forEach(d => {
+          const l = parseFloat(d.length) || 0;
+          const w = parseFloat(d.width) || 0;
+          const h = parseFloat(d.height) || 0;
+          if (l > 0 || w > 0 || h > 0) {
+            const p = [l, w, h].filter(v => v > 0);
+            totalQty += p.reduce((acc, v) => acc * v, 1);
+          }
+        });
+        item.qty = item.dimension_unit === "mm" ? Math.round(totalQty).toString() : totalQty.toFixed(2);
+      }
 
       item.length = dims[0].length;
       item.width = dims[0].width;
@@ -1406,21 +1440,25 @@ export default function CreateSketchPlan() {
       dims[dimIdx] = { ...dims[dimIdx], [field]: value };
       item.dimensions = dims;
 
-      let totalQty = 0;
-      dims.forEach(d => {
-        const l = parseFloat(d.length) || 0;
-        const w = parseFloat(d.width) || 0;
-        const h = parseFloat(d.height) || 0;
-        if (l > 0 || w > 0 || h > 0) {
-          const p = [l, w, h].filter(v => v > 0);
-          totalQty += p.reduce((acc, v) => acc * v, 1);
-        }
-      });
-
-      if (totalQty > 0) {
-        item.qty = item.dimension_unit === "mm" ? Math.round(totalQty).toString() : totalQty.toFixed(2);
+      if (item.dimension_unit === "ls") {
+        item.qty = "1";
       } else {
-        item.qty = "0";
+        let totalQty = 0;
+        dims.forEach(d => {
+          const l = parseFloat(d.length) || 0;
+          const w = parseFloat(d.width) || 0;
+          const h = parseFloat(d.height) || 0;
+          if (l > 0 || w > 0 || h > 0) {
+            const p = [l, w, h].filter(v => v > 0);
+            totalQty += p.reduce((acc, v) => acc * v, 1);
+          }
+        });
+
+        if (totalQty > 0) {
+          item.qty = item.dimension_unit === "mm" ? Math.round(totalQty).toString() : totalQty.toFixed(2);
+        } else {
+          item.qty = "0";
+        }
       }
 
       if (dimIdx === 0) {
@@ -1434,50 +1472,55 @@ export default function CreateSketchPlan() {
     });
   }, []);
 
-  const updateItem = (idx: number, field: keyof PlanItem, value: any) => {
-    const newItems = [...items];
-    newItems[idx] = { ...newItems[idx], [field]: value };
+  const updateItem = useCallback((idx: number, field: keyof PlanItem, value: any) => {
+    setItems(prev => {
+      const next = [...prev];
+      if (!next[idx]) return prev;
+      next[idx] = { ...next[idx], [field]: value };
 
-    // Auto-calculate quantity if dimensions or unit change
-    if (["length", "width", "height", "dimension_unit"].includes(field)) {
-      if (field === "dimension_unit") {
-        const dims = newItems[idx].dimensions?.length ? newItems[idx].dimensions : [{ id: "def", length: newItems[idx].length, width: newItems[idx].width, height: newItems[idx].height, note: newItems[idx].description }];
-        let totalQty = 0;
-        dims.forEach((d: any) => {
-          const l = parseFloat(d.length) || 0;
-          const w = parseFloat(d.width) || 0;
-          const h = parseFloat(d.height) || 0;
-          if (l > 0 || w > 0 || h > 0) {
-            const p = [l, w, h].filter(v => v > 0);
-            totalQty += p.reduce((acc, v) => acc * v, 1);
+      // If unit is LS, force quantity to 1
+      if (next[idx].dimension_unit === "ls") {
+        next[idx].qty = "1";
+      } else if (["length", "width", "height", "dimension_unit"].includes(field as string)) {
+        // Auto-calculate quantity if dimensions or unit change
+        if (field === "dimension_unit") {
+          const dims = next[idx].dimensions?.length ? next[idx].dimensions : [{ id: "def", length: next[idx].length, width: next[idx].width, height: next[idx].height, note: next[idx].description }];
+          let totalQty = 0;
+          dims.forEach((d: any) => {
+            const l = parseFloat(d.length) || 0;
+            const w = parseFloat(d.width) || 0;
+            const h = parseFloat(d.height) || 0;
+            if (l > 0 || w > 0 || h > 0) {
+              const p = [l, w, h].filter(v => v > 0);
+              totalQty += p.reduce((acc, v) => acc * v, 1);
+            }
+          });
+          if (totalQty > 0) {
+            next[idx].qty = value === "mm" ? Math.round(totalQty).toString() : totalQty.toFixed(2);
+          } else if (value === "mm") {
+            const currentQty = parseFloat(next[idx].qty) || 0;
+            next[idx].qty = Math.round(currentQty).toString();
           }
-        });
-        if (totalQty > 0) {
-          newItems[idx].qty = value === "mm" ? Math.round(totalQty).toString() : totalQty.toFixed(2);
-        } else if (value === "mm") {
-          const currentQty = parseFloat(newItems[idx].qty) || 0;
-          newItems[idx].qty = Math.round(currentQty).toString();
-        }
-      } else {
-        const l = parseFloat(newItems[idx].length) || 0;
-        const w = parseFloat(newItems[idx].width) || 0;
-        const h = parseFloat(newItems[idx].height) || 0;
-        if (l > 0 || w > 0 || h > 0) {
-          const dimsArr = [l, w, h].filter(v => v > 0);
-          const autoQty = dimsArr.reduce((acc, v) => acc * v, 1);
-          newItems[idx].qty = newItems[idx].dimension_unit === "mm"
-            ? Math.round(autoQty).toString()
-            : autoQty.toFixed(2);
-        } else if (newItems[idx].dimension_unit === "mm") {
-          const currentQty = parseFloat(newItems[idx].qty) || 0;
-          newItems[idx].qty = Math.round(currentQty).toString();
+        } else {
+          const l = parseFloat(next[idx].length) || 0;
+          const w = parseFloat(next[idx].width) || 0;
+          const h = parseFloat(next[idx].height) || 0;
+          if (l > 0 || w > 0 || h > 0) {
+            const dimsArr = [l, w, h].filter(v => v > 0);
+            const autoQty = dimsArr.reduce((acc, v) => acc * v, 1);
+            next[idx].qty = next[idx].dimension_unit === "mm"
+              ? Math.round(autoQty).toString()
+              : autoQty.toFixed(2);
+          } else if (next[idx].dimension_unit === "mm") {
+            const currentQty = parseFloat(next[idx].qty) || 0;
+            next[idx].qty = Math.round(currentQty).toString();
+          }
         }
       }
-    }
-
-    setItems(newItems);
-    if (sortBy !== "none") setSortBy("none");
-  };
+      return next;
+    });
+    setSortBy("none");
+  }, []);
 
   const handlePlanImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
@@ -1578,7 +1621,13 @@ export default function CreateSketchPlan() {
     newItems[idx].material_id = material.id;
     newItems[idx].item_name = material.name;
     if (updateCategory && material.category) newItems[idx].category = material.category;
-    if (material.unit) newItems[idx].unit = material.unit;
+    if (material.unit) {
+      newItems[idx].unit = material.unit;
+      if (material.unit.toLowerCase() === "ls") {
+        newItems[idx].dimension_unit = "ls";
+        newItems[idx].qty = "1";
+      }
+    }
 
     // Automatically load material image into PRE option if available
     if (material.image) {
@@ -1651,40 +1700,35 @@ export default function CreateSketchPlan() {
     if (idsToRemove.size > 0) {
       const newItems = items.filter(item => !idsToRemove.has(item.id));
       setItems(newItems);
-      toast({ title: "Duplicates Cleaned", description: `Removed ${idsToRemove.size} redundant rows.` });
+      toast({ title: "Duplicates Cleaned", description: `Removed ${idsToRemove.size} redundant rows. Don't forget to save your changes.` });
       setDuplicateGroups([]);
       setSelectedDuplicateIndices(new Set());
       setShowDuplicateDialog(false);
       if (sortBy !== "none") setSortBy("none");
-      // Trigger a save so the user doesn't lose the cleanup
-      // IMPORTANT: Pass newItems directly to avoid stale closure issues
-      performSave(false, newItems);
     } else {
       setShowDuplicateDialog(false);
     }
   };
 
 
-  const performSave = async (showToast: boolean = true, itemsToSave?: PlanItem[]) => {
-    if (isSavingRef.current) return;
+  const performSave = async () => {
+    if (isSavingRef.current || saving) return;
 
     if (!name.trim()) {
-      if (showToast) toast({ title: "Validation Error", description: "Please enter a Plan Name before saving.", variant: "destructive" });
+      toast({ title: "Validation Error", description: "Please enter a Plan Name before saving.", variant: "destructive" });
       return;
     }
 
     isSavingRef.current = true;
-    if (!showToast) setAutoSaveStatus("saving");
-    else setSaving(true);
+    setSaving(true);
 
     try {
-      const payloadItems = itemsToSave || items;
       const payload = {
         name,
         project_id: projectId === "none" ? null : projectId,
         location: locationStr,
         plan_date: planDate,
-        items: payloadItems.map(it => {
+        items: items.map(it => {
           const flattenedImages = [
             ...(it.preImages || []).map(img => ({ ...img, name: `PRE_${img.name}` })),
             ...(it.postImages || []).map(img => ({ ...img, name: `POST_${img.name}` }))
@@ -1700,76 +1744,32 @@ export default function CreateSketchPlan() {
         attachments: attachments.map(att => ({ file_url: att.url, file_name: att.name, file_type: att.type }))
       };
 
-      const jsonStr = JSON.stringify(payload);
-      if (jsonStr === lastSavedRef.current) {
-        if (!showToast) {
-          setAutoSaveStatus("saved");
-          setTimeout(() => setAutoSaveStatus("idle"), 2000);
-          return;
-        }
-        // If it's a manual save and already identical, just treat as success
-        toast({ title: "Already Saved", description: "Your changes were already captured by auto-save." });
-        setLocation("/sketch-plans");
-        return;
-      }
-
       const res = await apiFetch(currentId ? `/api/sketch-plans/${currentId}` : "/api/sketch-plans", {
         method: currentId ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: jsonStr
+        body: JSON.stringify(payload)
       });
 
       if (res.ok) {
         const data = await res.json();
-        lastSavedRef.current = jsonStr;
-
         if (!currentId && data.id) {
           setCurrentId(data.id);
         }
-
-        if (showToast) {
-          toast({ title: "Success", description: `Plan ${isEditing ? "updated" : "created"} successfully` });
-          setLocation("/sketch-plans");
-        } else {
-          setAutoSaveStatus("saved");
-          setTimeout(() => setAutoSaveStatus("idle"), 2000);
-        }
+        toast({ title: "Success", description: "Plan saved successfully" });
       } else {
         const errorData = await res.json().catch(() => ({ message: "Unknown error" }));
-        if (showToast) {
-          toast({ title: "Error", description: errorData.message || "Failed to save plan", variant: "destructive" });
-        } else {
-          setAutoSaveStatus("idle");
-        }
+        toast({ title: "Error", description: errorData.message || "Failed to save plan", variant: "destructive" });
       }
     } catch (err) {
       console.error("Save error:", err);
-      if (showToast) {
-        toast({ title: "Error", description: "Failed to save plan", variant: "destructive" });
-      } else {
-        setAutoSaveStatus("idle");
-      }
+      toast({ title: "Error", description: "Failed to save plan", variant: "destructive" });
     } finally {
       setSaving(false);
       isSavingRef.current = false;
     }
   };
 
-  const savePlan = () => performSave(true);
-
-  // Debounced auto-save
-  useEffect(() => {
-    if (isLocked) return;
-    if (!name.trim() || items.length === 0) return;
-
-    if (saving || isSavingRef.current) return;
-
-    const timer = setTimeout(() => {
-      performSave(false);
-    }, 3000);
-
-    return () => clearTimeout(timer);
-  }, [name, projectId, locationStr, planDate, items, planImages, isLocked]);
+  const savePlan = () => performSave();
 
   const prepareImageForPdf = (url: string): Promise<string> => {
     return new Promise((resolve) => {
@@ -2282,13 +2282,21 @@ export default function CreateSketchPlan() {
     });
   };
 
-  const filteredItems = items.filter(it =>
-    (isSupplier ? it.assigned_vendor_id === (user as any)?.shopId : true) &&
-    ((it.item_name || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (it.description || "").toLowerCase().includes(searchTerm.toLowerCase())) &&
-    (categoryFilter === "all" || it.category === categoryFilter)
-  );
+  const filteredItems = React.useMemo(() => {
+    return items.filter(it =>
+      (isSupplier ? it.assigned_vendor_id === (user as any)?.shopId : true) &&
+      ((it.item_name || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (it.description || "").toLowerCase().includes(searchTerm.toLowerCase())) &&
+      (categoryFilter === "all" || it.category === categoryFilter)
+    );
+  }, [items, searchTerm, categoryFilter, isSupplier, user]);
+
   const isFiltering = filteredItems.length !== items.length;
+
+  const totalPages = Math.ceil(filteredItems.length / pageSize);
+  const paginatedItems = React.useMemo(() => {
+    return filteredItems.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  }, [filteredItems, currentPage, pageSize]);
 
   const LayoutComponent = isSupplier ? SupplierLayout : Layout;
 
@@ -2350,32 +2358,7 @@ export default function CreateSketchPlan() {
                 <Copy className="w-3 h-3" /> Check Duplicates
               </Button>
             )}
-            <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-slate-50 rounded-md border border-slate-100 min-w-[140px] justify-center transition-all">
-              {autoSaveStatus === "saving" && (
-                <>
-                  <div className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" />
-                  <span className="text-[10px] font-medium text-slate-500 italic">Saving changes...</span>
-                </>
-              )}
-              {autoSaveStatus === "saved" && (
-                <>
-                  <Check className="w-3 h-3 text-green-500" />
-                  <span className="text-[10px] font-medium text-slate-500">All changes saved</span>
-                </>
-              )}
-              {autoSaveStatus === "error" && (
-                <>
-                  <AlertTriangle className="w-3 h-3 text-red-500" />
-                  <span className="text-[10px] font-medium text-red-500">Save failed</span>
-                </>
-              )}
-              {autoSaveStatus === "idle" && (
-                <>
-                  <Cloud className="w-3 h-3 text-slate-300" />
-                  <span className="text-[10px] font-medium text-slate-400">Auto-save ready</span>
-                </>
-              )}
-            </div>
+
             {userRole !== "supplier" && (
               <Button onClick={savePlan} disabled={saving || isLocked} className="gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white h-8 px-4 text-[10px] font-bold shadow-sm">
                 <Save className="w-3 h-3" /> {saving ? "Saving..." : "Save Plan"}
@@ -2572,55 +2555,64 @@ export default function CreateSketchPlan() {
 
           {/* Enhanced Items Section */}
           {/* Project Items - Main Workspace */}
-          <div className="sticky top-0 z-20 bg-white shadow-sm border-b border-slate-200 p-4 rounded-lg mb-4 flex flex-col md:flex-row justify-between items-center gap-4">
-            <div className="flex items-center gap-2 w-full md:w-auto flex-1">
-              <div className="relative w-full max-w-sm">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                <Input
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Search item name or notes..."
-                  className="pl-9 h-10 border-slate-200 shadow-sm focus:ring-indigo-500"
+          <div className="sticky top-0 z-20 bg-white shadow-sm border-b border-slate-200 p-4 rounded-lg mb-4 flex flex-col gap-4">
+            <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+              <div className="flex items-center gap-2 w-full md:w-auto flex-1">
+                <div className="relative w-full max-w-sm">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <Input
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    placeholder="Search item name or notes..."
+                    className="pl-9 h-10 border-slate-200 shadow-sm focus:ring-indigo-500"
+                  />
+                </div>
+                <Select value={sortBy} onValueChange={handleSort}>
+                  <SelectTrigger className="w-[160px] h-10 bg-white">
+                    <div className="flex items-center gap-2">
+                      <ArrowDownAz className="w-4 h-4 text-slate-400" />
+                      <SelectValue placeholder="Sort Items" />
+                    </div>
+                  </SelectTrigger>
+                  <SelectContent className="z-[110]">
+                    <SelectItem value="none">Manual Order</SelectItem>
+                    <SelectItem value="name-asc">Item Sort (A-Z)</SelectItem>
+                    <SelectItem value="name-desc">Item Sort (Z-A)</SelectItem>
+                    <SelectItem value="category-asc">Category Sort (A-Z)</SelectItem>
+                    <SelectItem value="category-desc">Category Sort (Z-A)</SelectItem>
+                    <SelectItem value="notes-asc">Notes Sort (A-Z)</SelectItem>
+                    <SelectItem value="notes-desc">Notes Sort (Z-A)</SelectItem>
+                    <SelectItem value="qty-desc">Qty Sort (High to Low)</SelectItem>
+                    <SelectItem value="qty-asc">Qty Sort (Low to High)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center gap-3 bg-white p-2 rounded-lg border border-slate-200 shadow-sm">
+                <Label htmlFor="compact-mode" className="text-xs font-bold text-slate-600 cursor-pointer">Compact View</Label>
+                <Checkbox
+                  id="compact-mode"
+                  checked={isCompact}
+                  onCheckedChange={(checked) => setIsCompact(!!checked)}
                 />
               </div>
-              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                <SelectTrigger className="w-[180px] h-10 bg-white">
-                  <SelectValue placeholder="All Categories" />
-                </SelectTrigger>
-                <SelectContent className="max-h-[300px] overflow-y-auto">
-                  <SelectItem value="all">All Categories</SelectItem>
-                  {Array.from(new Set(items.map(it => it.category).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b))).map(cat => (
-                    <SelectItem key={cat as string} value={cat as string}>{cat as string}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={sortBy} onValueChange={handleSort}>
-                <SelectTrigger className="w-[160px] h-10 bg-white">
-                  <div className="flex items-center gap-2">
-                    <ArrowDownAz className="w-4 h-4 text-slate-400" />
-                    <SelectValue placeholder="Sort Items" />
-                  </div>
-                </SelectTrigger>
-                <SelectContent className="z-[110]">
-                  <SelectItem value="none">Manual Order</SelectItem>
-                  <SelectItem value="name-asc">Item Sort (A-Z)</SelectItem>
-                  <SelectItem value="name-desc">Item Sort (Z-A)</SelectItem>
-                  <SelectItem value="category-asc">Category Sort (A-Z)</SelectItem>
-                  <SelectItem value="category-desc">Category Sort (Z-A)</SelectItem>
-                  <SelectItem value="notes-asc">Notes Sort (A-Z)</SelectItem>
-                  <SelectItem value="notes-desc">Notes Sort (Z-A)</SelectItem>
-                  <SelectItem value="qty-desc">Qty Sort (High to Low)</SelectItem>
-                  <SelectItem value="qty-asc">Qty Sort (Low to High)</SelectItem>
-                </SelectContent>
-              </Select>
             </div>
-            <div className="flex items-center gap-3 bg-white p-2 rounded-lg border border-slate-200 shadow-sm">
-              <Label htmlFor="compact-mode" className="text-xs font-bold text-slate-600 cursor-pointer">Compact View</Label>
-              <Checkbox
-                id="compact-mode"
-                checked={isCompact}
-                onCheckedChange={(checked) => setIsCompact(!!checked)}
-              />
+
+            {/* Category Tabs - Horizontal Scrolling */}
+            <div className="border-t pt-3 relative bg-slate-50/30 px-4 -mx-4">
+              <div className="overflow-x-auto pb-1 custom-scrollbar scroll-smooth">
+                <Tabs value={categoryFilter} onValueChange={setCategoryFilter} className="w-full">
+                  <TabsList className="bg-transparent p-0 w-max flex justify-start h-10 flex-nowrap gap-1">
+                    <TabsTrigger value="all" className="text-[10px] font-black px-6 h-9 uppercase tracking-widest rounded-t-lg border-x border-t border-transparent data-[state=active]:border-slate-200 data-[state=active]:bg-white data-[state=active]:text-indigo-600 transition-all">
+                      All ({items.length})
+                    </TabsTrigger>
+                    {Array.from(new Set(items.map(it => it.category).filter(Boolean))).sort().map(cat => (
+                      <TabsTrigger key={cat as string} value={cat as string} className="text-[10px] font-black px-6 h-9 uppercase tracking-widest rounded-t-lg border-x border-t border-transparent data-[state=active]:border-slate-200 data-[state=active]:bg-white data-[state=active]:text-indigo-600 transition-all">
+                        {cat as string} ({items.filter(it => it.category === cat).length})
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </Tabs>
+              </div>
             </div>
           </div>
 
@@ -2678,6 +2670,104 @@ export default function CreateSketchPlan() {
                 </Button>
               </div>
             </CardHeader>
+
+            {/* Top Navigation Bar */}
+            <div className="py-2.5 px-4 border-b bg-slate-50/50 flex flex-col md:flex-row items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-3 gap-1.5 font-bold text-[10px] uppercase tracking-widest border-slate-200 text-slate-600 hover:bg-white shadow-sm"
+                  onClick={() => {
+                    if (currentPage > 1) {
+                      setCurrentPage(prev => prev - 1);
+                    } else {
+                      const catList = ["all", ...Array.from(new Set(items.map(it => it.category).filter((c): c is string => Boolean(c)))).sort()];
+                      const currentIdx = catList.indexOf(categoryFilter);
+                      if (currentIdx > 0) {
+                        setCategoryFilter(catList[currentIdx - 1]);
+                        setCurrentPage(1);
+                      }
+                    }
+                  }}
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" /> Previous
+                </Button>
+
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    {totalPages > 1 && Array.from({ length: totalPages }).map((_, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setCurrentPage(i + 1)}
+                        className={cn(
+                          "w-7 h-7 rounded-full text-[10px] font-bold transition-all",
+                          currentPage === i + 1 ? "bg-indigo-600 text-white shadow-md scale-105" : "bg-white text-slate-400 hover:text-indigo-600 border border-slate-100"
+                        )}
+                      >
+                        {i + 1}
+                      </button>
+                    ))}
+                    {totalPages <= 1 && (
+                      <Badge variant="outline" className="bg-white text-indigo-900 border-indigo-100 text-[9px] font-bold px-2 py-0.5 uppercase tracking-tighter">
+                        Single Page
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="h-4 w-px bg-slate-200 mx-1" />
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-black text-indigo-900 uppercase tracking-widest leading-none">
+                      {categoryFilter === "all" ? "Master View" : categoryFilter}
+                    </span>
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">
+                      Page {currentPage} of {totalPages}
+                    </span>
+                  </div>
+                </div>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-3 gap-1.5 font-bold text-[10px] uppercase tracking-widest border-slate-200 text-slate-600 hover:bg-white shadow-sm"
+                  onClick={() => {
+                    if (currentPage < totalPages) {
+                      setCurrentPage(prev => prev + 1);
+                    } else {
+                      const catList = ["all", ...Array.from(new Set(items.map(it => it.category).filter((c): c is string => Boolean(c)))).sort()];
+                      const currentIdx = catList.indexOf(categoryFilter);
+                      if (currentIdx < catList.length - 1) {
+                        setCategoryFilter(catList[currentIdx + 1]);
+                        setCurrentPage(1);
+                      }
+                    }
+                  }}
+                >
+                  Next <ChevronRight className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+
+              <div className="hidden lg:flex items-center gap-1.5">
+                {["all", ...Array.from(new Set(items.map(it => it.category).filter((c): c is string => Boolean(c)))).sort()].map((cat, idx) => (
+                  <TooltipProvider key={cat}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div
+                          className={cn(
+                            "h-1.5 rounded-full transition-all cursor-pointer",
+                            categoryFilter === cat ? "w-8 bg-indigo-600" : "w-3 bg-slate-200 hover:bg-slate-300"
+                          )}
+                          onClick={() => setCategoryFilter(cat)}
+                        />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p className="text-[10px] font-bold">{cat === "all" ? "All Materials" : cat}</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                ))}
+              </div>
+            </div>
+
             <CardContent className="p-0">
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse">
@@ -2711,7 +2801,7 @@ export default function CreateSketchPlan() {
                     setItems(newOrder);
                     if (sortBy !== "none") setSortBy("none");
                   }} key={sortBy}>
-                    {filteredItems.map((item, idx) => (
+                    {paginatedItems.map((item, idx) => (
                       <SketchPlanRow
                         key={item.id}
                         item={item}
@@ -2917,14 +3007,6 @@ export default function CreateSketchPlan() {
                       <DialogTitle className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pr-8">
                         <div className="flex items-center gap-3">
                           <span className="text-sm sm:text-base">Site Sketch Editor</span>
-                          {autoSaveStatus !== "idle" && (
-                            <Badge variant="outline" className={cn(
-                              "text-[9px] font-black uppercase tracking-widest px-2 py-0 border-none",
-                              autoSaveStatus === "saving" ? "bg-amber-100 text-amber-600 animate-pulse" : "bg-emerald-100 text-emerald-600"
-                            )}>
-                              {autoSaveStatus === "saving" ? "Saving..." : "Saved"}
-                            </Badge>
-                          )}
                         </div>
                         <div className="flex items-center gap-2 text-[10px] sm:text-xs font-normal">
                           <span className="text-slate-500">Save to:</span>

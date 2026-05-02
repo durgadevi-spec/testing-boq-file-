@@ -72,6 +72,7 @@ import {
   BarChart3
 } from "lucide-react";
 import { BoqAnalysisDialog } from "@/components/BoqAnalysisDialog";
+import { RateSuggestionPopover } from "@/components/RateSuggestionPopover";
 
 /** Helper to generate Excel-style column names (A, B, C... Z, AA, AB...) */
 const getExcelColumnName = (n: number) => {
@@ -127,8 +128,25 @@ const getItemMetrics = (td: any) => {
       s + (it.qty || 0) * ((it.supply_rate || 0) + (it.install_rate || 0)), 0);
     itemQty = step11[0]?.qty || 0;
   }
-  const itemRate = itemQty > 0 ? itemTotal / itemQty : itemTotal;
-  return { itemTotal, itemQty, itemRate, step11 };
+  let finalRate = itemQty > 0 ? itemTotal / itemQty : itemTotal;
+
+  if (td.is_lump_sum) {
+    itemQty = 1;
+    finalRate = itemTotal;
+  }
+
+  if (td.use_standard_rate && td.materialLines) {
+    try {
+      const baseQty = Number(td.configBasis?.baseRequiredQty || 1);
+      const resBase = computeBoq({ ...td.configBasis, wastagePctDefault: 0 }, td.materialLines.map((l: any) => ({ ...l, applyWastage: false })), baseQty);
+      finalRate = resBase.grandTotal / baseQty;
+      itemTotal = finalRate * itemQty;
+    } catch { }
+  } else if (td.use_fixed_rate) {
+    finalRate = Number(td.fixed_rate || 0);
+    itemTotal = finalRate * itemQty;
+  }
+  return { itemTotal, itemQty, itemRate: finalRate, step11 };
 };
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -535,6 +553,8 @@ export default function FinalizeBoq() {
   const [termsAndConditions, setTermsAndConditions] = useState<string>("");
 
   const [globalColSettings, setGlobalColSettings] = useState<{ [colName: string]: any }>({});
+  // Tracks which {itemId -> colName} values were filled from Rate History
+  const [historyUsedFields, setHistoryUsedFields] = useState<{ [itemId: string]: { [colName: string]: boolean } }>({});
   const [roundOff, setRoundOff] = useState<boolean>(false);
   const [isColumnManagerOpen, setIsColumnManagerOpen] = useState(false);
   const [isAnalysisDialogOpen, setIsAnalysisDialogOpen] = useState(false);
@@ -780,9 +800,10 @@ export default function FinalizeBoq() {
       const { itemRate, itemQty } = getItemMetrics(td);
 
       const manualQtyStr = productQuantities[item.id];
-      const displayQty = manualQtyStr !== undefined
+      const isLumpSum = td.is_lump_sum || productUnits[item.id]?.toLowerCase() === 'ls';
+      const displayQty = isLumpSum ? 1 : (manualQtyStr !== undefined
         ? (parseFloat(manualQtyStr) || 0)
-        : itemQty;
+        : itemQty);
 
       const baseTotalValue = roundOff ? Math.round(itemRate * displayQty) : itemRate * displayQty;
       totalValueSum += baseTotalValue;
@@ -1344,6 +1365,9 @@ export default function FinalizeBoq() {
         try { existingTd = JSON.parse(existingTd); } catch { existingTd = {}; }
       }
 
+      const currentUnit = updatedUnit !== undefined ? updatedUnit : (productUnits[boqItemId] ?? "");
+      const isLS = currentUnit.toLowerCase() === 'ls' || existingTd.is_lump_sum === true;
+
       const updatedTd = {
         ...existingTd,
         finalize_columns: updatedCols !== undefined ? updatedCols : (customColumns[boqItemId] || []),
@@ -1355,6 +1379,7 @@ export default function FinalizeBoq() {
         finalize_hide_system_total: hideSystemTotalFooter,
         finalize_grand_total_column: grandTotalColumn,
         finalize_hidden_predefined_cols: updatedHiddenPredefinedCols !== undefined ? updatedHiddenPredefinedCols : hiddenPredefinedCols,
+        is_lump_sum: isLS,
       };
 
       const resp = await apiFetch(`/api/boq-items/${boqItemId}`, {
@@ -2047,7 +2072,7 @@ export default function FinalizeBoq() {
           : derivedProductName;
         const category = tableData.category || "";
 
-        const isLumpSum = tableData.is_lump_sum === true;
+        const isLumpSum = tableData.is_lump_sum === true || productUnits[boqItem.id]?.toLowerCase() === 'ls';
         const manualQtyStr = productQuantities[boqItem.id];
         const displayQty = isLumpSum ? 1 : (manualQtyStr !== undefined
           ? (parseFloat(manualQtyStr) || 0)
@@ -2339,7 +2364,7 @@ export default function FinalizeBoq() {
           rowImages[boqIdx] = parsedImageUrl;
         }
 
-        const isLumpSum = tableData.is_lump_sum === true;
+        const isLumpSum = tableData.is_lump_sum === true || productUnits[boqItem.id]?.toLowerCase() === 'ls';
         const manualQtyStr = productQuantities[boqItem.id];
         const displayQty = isLumpSum ? 1 : (manualQtyStr !== undefined
           ? (parseFloat(manualQtyStr) || 0)
@@ -4035,8 +4060,21 @@ export default function FinalizeBoq() {
                                     return productUnits[boqItem.id] ?? defaultUnit;
                                   })()}
                                   disabled={isVersionSubmitted || tableData.is_lump_sum}
-                                  onChange={e => setProductUnits(prev => ({ ...prev, [boqItem.id]: e.target.value }))}
-                                  onBlur={() => saveItemLayout(boqItem.id, undefined, undefined, undefined, undefined, undefined, productUnits[boqItem.id])}
+                                  onChange={e => {
+                                    const newUnit = e.target.value;
+                                    setProductUnits(prev => ({ ...prev, [boqItem.id]: newUnit }));
+                                    if (newUnit.toLowerCase() === 'ls') {
+                                      setProductQuantities(prev => ({ ...prev, [boqItem.id]: "1" }));
+                                    }
+                                  }}
+                                  onBlur={() => {
+                                    const currentUnit = productUnits[boqItem.id];
+                                    if (currentUnit?.toLowerCase() === 'ls') {
+                                      saveItemLayout(boqItem.id, undefined, undefined, undefined, "1", undefined, currentUnit);
+                                    } else {
+                                      saveItemLayout(boqItem.id, undefined, undefined, undefined, undefined, undefined, currentUnit);
+                                    }
+                                  }}
                                   className={`w-full border-none rounded p-0.5 text-[10px] focus:ring-1 ring-blue-300 outline-none ${tableData.is_lump_sum ? 'bg-transparent text-gray-500' : 'bg-transparent'} text-center font-semibold h-7 ${(() => {
                                     const defaultUnit = (tableData.targetRequiredQty !== undefined && tableData.targetRequiredQty !== null)
                                       ? (tableData.configBasis?.requiredUnitType || tableData.unit || "Sqft")
@@ -4052,10 +4090,15 @@ export default function FinalizeBoq() {
                                 <input
                                   type="number"
                                   value={tableData.is_lump_sum ? 1 : (productQuantities[boqItem.id] ?? (tableData.targetRequiredQty !== undefined ? tableData.targetRequiredQty : (currentStep11Items[0]?.qty || 0)))}
-                                  disabled={isVersionSubmitted || tableData.is_lump_sum}
-                                  onChange={e => setProductQuantities(prev => ({ ...prev, [boqItem.id]: e.target.value }))}
+                                  disabled={isVersionSubmitted || tableData.is_lump_sum || (productUnits[boqItem.id]?.toLowerCase() === 'ls')}
+                                  onChange={e => {
+                                    const newQty = e.target.value;
+                                    const isLS = productUnits[boqItem.id]?.toLowerCase() === 'ls';
+                                    if (isLS) return;
+                                    setProductQuantities(prev => ({ ...prev, [boqItem.id]: newQty }));
+                                  }}
                                   onBlur={async () => { await saveItemLayout(boqItem.id, undefined, undefined, undefined, productQuantities[boqItem.id]); }}
-                                  className={`w-full border-none rounded p-0.5 text-[10px] focus:ring-1 ring-blue-300 outline-none ${tableData.is_lump_sum ? 'bg-transparent text-gray-500' : 'bg-blue-100/50'} text-center font-semibold h-7 ${getIsModified(boqItem.id, "qty", productQuantities[boqItem.id] ?? (tableData.targetRequiredQty !== undefined ? tableData.targetRequiredQty : (currentStep11Items[0]?.qty || 0))) ? "text-blue-600 border-b border-blue-400" : ""}`}
+                                  className={`w-full border-none rounded p-0.5 text-[10px] focus:ring-1 ring-blue-300 outline-none ${(tableData.is_lump_sum || (productUnits[boqItem.id]?.toLowerCase() === 'ls')) ? 'bg-transparent text-gray-500' : 'bg-blue-100/50'} text-center font-semibold h-7 ${getIsModified(boqItem.id, "qty", productQuantities[boqItem.id] ?? (tableData.targetRequiredQty !== undefined ? tableData.targetRequiredQty : (currentStep11Items[0]?.qty || 0))) ? "text-blue-600 border-b border-blue-400" : ""}`}
                                   placeholder="Qty"
                                 />
                               </td>
@@ -4068,7 +4111,7 @@ export default function FinalizeBoq() {
                             {!hiddenPredefinedCols.system_total && (
                               <td className="border-r px-2 py-1.5 text-right font-semibold text-gray-800 bg-gray-50 align-middle text-[10px] w-32">
                                 ₹{(() => {
-                                  const displayQty = tableData.is_lump_sum ? 1 : (productQuantities[boqItem.id] !== undefined ? parseFloat(productQuantities[boqItem.id]) || 0 : (tableData.targetRequiredQty !== undefined ? Number(tableData.targetRequiredQty) : Number(currentStep11Items[0]?.qty || 0)));
+                                  const displayQty = (tableData.is_lump_sum || productUnits[boqItem.id]?.toLowerCase() === 'ls') ? 1 : (productQuantities[boqItem.id] !== undefined ? parseFloat(productQuantities[boqItem.id]) || 0 : (tableData.targetRequiredQty !== undefined ? Number(tableData.targetRequiredQty) : Number(currentStep11Items[0]?.qty || 0)));
                                   const rawVal = rateSqft * displayQty;
                                   return (roundOff ? Math.round(rawVal) : rawVal).toLocaleString(undefined, { minimumFractionDigits: roundOff ? 0 : 2, maximumFractionDigits: roundOff ? 0 : 2 });
                                 })()}
@@ -4091,7 +4134,8 @@ export default function FinalizeBoq() {
                               <td className="border-r px-2 py-1.5 text-right font-semibold text-gray-800 bg-gray-50 align-middle text-[10px] w-32">
                                 ₹{(() => {
                                   const overrideRateVal = parseFloat(overrideRates[boqItem.id] || "0") || 0;
-                                  const displayQty = productQuantities[boqItem.id] !== undefined ? parseFloat(productQuantities[boqItem.id]) || 0 : (tableData.targetRequiredQty || currentStep11Items[0]?.qty || 0);
+                                  const isLumpSum = tableData.is_lump_sum || productUnits[boqItem.id]?.toLowerCase() === 'ls';
+                                  const displayQty = isLumpSum ? 1 : (productQuantities[boqItem.id] !== undefined ? parseFloat(productQuantities[boqItem.id]) || 0 : (tableData.targetRequiredQty || currentStep11Items[0]?.qty || 0));
                                   const rawVal = overrideRateVal * displayQty;
                                   return (roundOff ? Math.round(rawVal) : rawVal).toLocaleString(undefined, { minimumFractionDigits: roundOff ? 0 : 2, maximumFractionDigits: roundOff ? 0 : 2 });
                                 })()}
@@ -4099,7 +4143,7 @@ export default function FinalizeBoq() {
                             )}
                             {/* Custom columns */}
                             {(() => {
-                              const isLumpSum = tableData.is_lump_sum === true;
+                              const isLumpSum = tableData.is_lump_sum === true || productUnits[boqItem.id]?.toLowerCase() === 'ls';
                               const manualQtyStr = productQuantities[boqItem.id];
                               const displayQty = isLumpSum ? 1 : (manualQtyStr !== undefined ? (parseFloat(manualQtyStr) || 0) : (tableData.targetRequiredQty || currentStep11Items[0]?.qty || 0));
                               const baseTotalValue = rateSqft * displayQty;
@@ -4177,8 +4221,8 @@ export default function FinalizeBoq() {
                                       title={getIsModified(boqItem.id, "columns", col.name) ? "Modified from Template" : ""}
                                     >
                                       <div className="flex flex-col h-full min-h-[45px] justify-between">
-                                        <div className="absolute left-1 top-1 z-20 pointer-events-none group-hover/cell:pointer-events-auto focus-within:pointer-events-auto">
-                                          <div className="flex items-center gap-1 opacity-0 group-hover/cell:opacity-100 focus-within:opacity-100 transition-opacity bg-white/95 p-1 rounded-md shadow-md border border-purple-200">
+                                        <div className="absolute left-1 top-1 z-20 pointer-events-none group-hover/cell:pointer-events-auto">
+                                          <div className="flex items-center gap-1 opacity-0 group-hover/cell:opacity-100 transition-opacity bg-white/95 p-1 rounded-md shadow-md border border-purple-200">
                                             <select
                                               className="bg-white border border-purple-300 rounded text-[10px] font-semibold text-purple-700 outline-none h-6 px-1 cursor-pointer"
                                               value={(itemCol as any).multiplierSource || "manual"}
@@ -4257,24 +4301,114 @@ export default function FinalizeBoq() {
                                               <option value="/">÷</option>
                                               <option value="+">+</option>
                                             </select>
+
+                                            {/* Rate History icon — lives inside the hover overlay so it's always clickable */}
+                                            {(() => {
+                                              const lower = col.name.toLowerCase();
+                                              const isRateCol = lower.includes("rate") && (lower.includes("supply") || lower.includes("labour") || lower.includes("install") || lower.includes("labor"));
+                                              const prodId = tableData.product_id || tableData.material_id;
+                                              if (isRateCol && prodId) {
+                                                return (
+                                                  <RateSuggestionPopover
+                                                    productId={prodId}
+                                                    columnName={col.name}
+                                                    onSelect={(val) => {
+                                                      // 1. Switch to Fixed Value mode
+                                                      const itemColList = customColumns[boqItem.id] || [];
+                                                      const targetCol = itemColList.find((c: any) => c.name === col.name) || col;
+                                                      const updatedCol = { ...targetCol, baseSource: 'manual', multiplierSource: 'manual', percentageValue: 0 };
+                                                      const nextCols = itemColList.some((c: any) => c.name === col.name)
+                                                        ? itemColList.map((c: any) => c.name === col.name ? updatedCol : c)
+                                                        : [...itemColList, updatedCol];
+                                                      setCustomColumns(prev => ({ ...prev, [boqItem.id]: nextCols }));
+
+                                                      // 2. Set the value
+                                                      const nextVals = {
+                                                        ...customColumnValues[boqItem.id],
+                                                        0: { ...(customColumnValues[boqItem.id]?.[0] || {}), [col.name]: val }
+                                                      };
+                                                      setCustomColumnValues(prev => ({ ...prev, [boqItem.id]: nextVals }));
+
+                                                      // 3. Mark as from history
+                                                      setHistoryUsedFields(prev => ({
+                                                        ...prev,
+                                                        [boqItem.id]: { ...(prev[boqItem.id] || {}), [col.name]: true }
+                                                      }));
+
+                                                      // 4. Save & notify
+                                                      saveItemLayout(boqItem.id, nextCols, nextVals);
+                                                      toast({ title: "Rate Applied", description: `${col.name} set to ₹${val} from history.` });
+                                                    }}
+                                                    triggerClassName="p-1 rounded bg-blue-100 hover:bg-blue-200 border border-blue-300 text-blue-600 hover:text-blue-800 transition-colors"
+                                                  />
+                                                );
+                                              }
+                                              return null;
+                                            })()}
                                           </div>
                                         </div>
 
-                                        <input
-                                          type="number"
-                                          disabled={isVersionSubmitted || isCalculated}
-                                          value={displayVal}
-                                          onChange={e => setCustomColumnValues(prev => ({
-                                            ...prev,
-                                            [boqItem.id]: {
-                                              ...prev[boqItem.id],
-                                              0: { ...(prev[boqItem.id]?.[0] || {}), [col.name]: e.target.value }
-                                            }
-                                          }))}
-                                          onBlur={() => saveItemLayout(boqItem.id)}
-                                          className={`w-full h-7 border-transparent rounded px-1 py-0.5 text-[11px] outline-none bg-transparent text-right font-bold transition-colors text-gray-800`}
-                                          placeholder="0.00"
-                                        />
+                                        <div className="flex items-center">
+                                          <input
+                                            type="number"
+                                            disabled={isVersionSubmitted || isCalculated}
+                                            value={displayVal}
+                                            onChange={e => setCustomColumnValues(prev => ({
+                                              ...prev,
+                                              [boqItem.id]: {
+                                                ...prev[boqItem.id],
+                                                0: { ...(prev[boqItem.id]?.[0] || {}), [col.name]: e.target.value }
+                                              }
+                                            }))}
+                                            onBlur={() => saveItemLayout(boqItem.id)}
+                                            className={`w-full h-7 border-transparent rounded px-1 py-0.5 text-[11px] outline-none bg-transparent text-right font-bold transition-colors ${
+                                              historyUsedFields[boqItem.id]?.[col.name] ? 'text-blue-700' : 'text-gray-800'
+                                            }`}
+                                            placeholder="0.00"
+                                          />
+                                        </div>
+
+                                        {/* History used badge + Reset button */}
+                                        {historyUsedFields[boqItem.id]?.[col.name] && (
+                                          <div className="flex items-center justify-end gap-1 mt-0.5">
+                                            <span className="text-[8px] font-bold text-blue-500 uppercase tracking-tight bg-blue-50 border border-blue-200 rounded px-1 py-0.5 leading-none">📋 History</span>
+                                            <button
+                                              title="Reset to formula / clear history value"
+                                              className="text-[8px] font-bold text-red-400 hover:text-red-600 uppercase tracking-tight bg-red-50 border border-red-200 rounded px-1 py-0.5 leading-none transition-colors"
+                                              onClick={() => {
+                                                // Switch back to Total Value formula
+                                                const itemColList = customColumns[boqItem.id] || [];
+                                                const targetCol = itemColList.find((c: any) => c.name === col.name) || col;
+                                                const updatedCol = { ...targetCol, baseSource: 'Total Value (₹)', multiplierSource: 'manual', percentageValue: 0 };
+                                                const nextCols = itemColList.some((c: any) => c.name === col.name)
+                                                  ? itemColList.map((c: any) => c.name === col.name ? updatedCol : c)
+                                                  : [...itemColList, updatedCol];
+                                                setCustomColumns(prev => ({ ...prev, [boqItem.id]: nextCols }));
+
+                                                // Clear the value
+                                                const nextVals = {
+                                                  ...customColumnValues[boqItem.id],
+                                                  0: { ...(customColumnValues[boqItem.id]?.[0] || {}), [col.name]: '' }
+                                                };
+                                                setCustomColumnValues(prev => ({ ...prev, [boqItem.id]: nextVals }));
+
+                                                // Remove history flag
+                                                setHistoryUsedFields(prev => {
+                                                  const next = { ...prev };
+                                                  if (next[boqItem.id]) {
+                                                    const cols = { ...next[boqItem.id] };
+                                                    delete cols[col.name];
+                                                    next[boqItem.id] = cols;
+                                                  }
+                                                  return next;
+                                                });
+
+                                                saveItemLayout(boqItem.id, nextCols, nextVals);
+                                                toast({ title: "Reset", description: `${col.name} reverted to formula.` });
+                                              }}
+                                            >↩ Reset</button>
+                                          </div>
+                                        )}
                                         {/* Row-level badges removed per user request */}
                                       </div>
                                     </td>

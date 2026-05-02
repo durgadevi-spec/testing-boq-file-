@@ -35,13 +35,23 @@ export async function registerSketchRoutes(app: Express) {
   // GET /api/sketch-plans - List all sketch plans
   app.get("/api/sketch-plans", authMiddleware, async (req: Request, res: Response) => {
     try {
-      const result = await query(
-        `SELECT sp.*, p.name as project_name, spl.is_locked, spl.request_status
-         FROM sketch_plans sp 
-         LEFT JOIN boq_projects p ON sp.project_id = p.id 
-         LEFT JOIN sketch_plan_locks spl ON sp.id = spl.plan_id
-         ORDER BY sp.project_id NULLS LAST, sp.created_at ASC`
-      );
+      const { parent_id } = req.query;
+      let queryStr = `
+        SELECT sp.*, p.name as project_name, spl.is_locked, spl.request_status
+        FROM sketch_plans sp 
+        LEFT JOIN boq_projects p ON sp.project_id = p.id 
+        LEFT JOIN sketch_plan_locks spl ON sp.id = spl.plan_id
+      `;
+      const queryParams: any[] = [];
+
+      if (parent_id) {
+        queryStr += ` WHERE sp.id = $1 OR sp.parent_plan_id = $1 `;
+        queryParams.push(parent_id);
+      }
+
+      queryStr += ` ORDER BY sp.project_id NULLS LAST, sp.created_at ASC`;
+
+      const result = await query(queryStr, queryParams);
       const archivedIds = archiveService.getArchivedItemIds('sketch_plans');
       const trashedIds = archiveService.getTrashedItemIds('sketch_plans');
       const filtered = (result.rows || []).filter((r: any) => !archivedIds.includes(r.id) && !trashedIds.includes(r.id));
@@ -434,11 +444,16 @@ export async function registerSketchRoutes(app: Express) {
 
         // Intelligent update: Delete items not in the request, and upsert others
         const incomingItemIds = (items || []).map((it: any) => it.id).filter((id: any) => id && id.startsWith('ski-'));
+
+        // 1. Handle items: Remove those not in incoming list, then upsert
         if (incomingItemIds.length > 0) {
           await client.query("DELETE FROM sketch_plan_items WHERE plan_id = $1 AND id NOT IN (SELECT unnest($2::text[]))", [id, incomingItemIds]);
         } else {
-          await query("DELETE FROM sketch_plan_items WHERE plan_id = $1", [id]);
+          await client.query("DELETE FROM sketch_plan_items WHERE plan_id = $1", [id]);
         }
+
+        // 2. Handle images: Clear all existing images for this plan to prevent duplicates
+        await client.query("DELETE FROM sketch_plan_images WHERE plan_id = $1", [id]);
 
         if (items && Array.isArray(items)) {
           for (const item of items) {
@@ -487,6 +502,7 @@ export async function registerSketchRoutes(app: Express) {
               ]
             );
 
+            // Re-insert item-level images
             if (item.images && Array.isArray(item.images)) {
               for (const img of item.images) {
                 const imgUrl = typeof img === "string" ? img : (img.url || img.image_url);
@@ -501,6 +517,7 @@ export async function registerSketchRoutes(app: Express) {
           }
         }
 
+        // Re-insert plan-level images
         if (images && Array.isArray(images)) {
           for (const img of images) {
             if (img.item_id) continue;
@@ -514,6 +531,7 @@ export async function registerSketchRoutes(app: Express) {
           }
         }
 
+        // 3. Handle attachments: Clear and re-insert
         await client.query("DELETE FROM sketch_plan_attachments WHERE plan_id = $1", [id]);
         const attachments = req.body.attachments;
         if (attachments && Array.isArray(attachments)) {

@@ -375,7 +375,24 @@ function BoqItemCard({ boqItem, boqIdx, isVersionSubmitted, expandedProductIds, 
 
 
   const totalAmount = displayLines.reduce((sum: number, it: any) => sum + (Number(it.amount) || 0), 0);
-  const ratePerUnit = totalAmount / (tableData.targetRequiredQty || (Number(displayLines[0]?.qty) || Number(step11Items[0]?.qty) || 1));
+
+  // Calculate Standard Rate at Base Qty (e.g. 100 Sqft) to ensure consistency across projects
+  const baseQty = Number(tableData.configBasis?.baseRequiredQty || 1);
+  let standardRate = 0;
+  if (isEngineBased) {
+    try {
+      const resBase = computeBoq({ ...tableData.configBasis, wastagePctDefault: 0 }, tableData.materialLines.map((l: any) => ({ ...l, applyWastage: false })), baseQty);
+      standardRate = resBase.grandTotal / baseQty;
+    } catch { }
+  }
+
+  // Use normalized standard rate if enabled, otherwise calculate from current total
+  const useStandardRate = !!tableData.use_standard_rate;
+  const ratePerUnit = useStandardRate ? standardRate : (totalAmount / (tableData.targetRequiredQty || (Number(displayLines[0]?.qty) || Number(step11Items[0]?.qty) || 1)));
+
+  // Final grand total reflects the standard rate if used
+  const grandTotalValue = useStandardRate ? (standardRate * (tableData.targetRequiredQty || 0)) : totalAmount;
+  const roundOffAdjustment = grandTotalValue - totalAmount;
 
   return (
     <div className="border rounded-lg overflow-hidden">
@@ -411,8 +428,35 @@ function BoqItemCard({ boqItem, boqIdx, isVersionSubmitted, expandedProductIds, 
               <HsnSacBadges tableData={tableData} />
             </div>
             {isEngineBased && (
-              <div className="flex items-center gap-2 text-[11px] text-gray-600 font-medium">
-                Project Target: <span className="text-blue-600 font-bold">{tableData.targetRequiredQty} {tableData.configBasis?.requiredUnitType}</span>
+              <div className="flex items-center gap-4 mt-1">
+                <div className="flex items-center gap-2 text-[11px] text-gray-600 font-medium">
+                  Project Target: <span className="text-blue-600 font-bold">{tableData.targetRequiredQty} {tableData.configBasis?.requiredUnitType}</span>
+                </div>
+                <div className="flex items-center gap-2 bg-white border border-gray-200 rounded px-2 py-0.5 shadow-sm">
+                  <label className="flex items-center gap-1.5 text-[10px] font-bold text-gray-600 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={useStandardRate}
+                      onChange={async (e) => {
+                        const checked = e.target.checked;
+                        try {
+                          const updatedTd = { ...tableData, use_standard_rate: checked };
+                          const resp = await apiFetch(`/api/boq-items/${boqItem.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ table_data: updatedTd }) });
+                          if (resp.ok) { setBoqItems((prev: BOMItem[]) => prev.map((i: BOMItem) => i.id === boqItem.id ? { ...i, table_data: updatedTd } : i)); }
+                        } catch (err) { console.error("Failed to toggle standard rate", err); }
+                      }}
+                    />
+                    Normalize Rate
+                  </label>
+                  {useStandardRate && (
+                    <div className="flex items-center gap-1 ml-1 border-l pl-2 border-gray-100">
+                      <span className="text-[10px] text-blue-700 font-bold">Standard: ₹{standardRate.toFixed(2)} / {tableData.configBasis?.requiredUnitType}</span>
+                      {baseQty !== 1 && (
+                        <span className="text-[9px] text-gray-400 font-normal">(₹{(standardRate * baseQty).toFixed(2)} per {baseQty} {tableData.configBasis?.requiredUnitType})</span>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -488,8 +532,22 @@ function BoqItemCard({ boqItem, boqIdx, isVersionSubmitted, expandedProductIds, 
               </tbody>
               <tfoot className="bg-gray-50/50 font-bold border-t-2 border-gray-200">
                 <tr>
-                  <td colSpan={10} className="border px-2 py-1.5 text-right uppercase tracking-wider text-[10px] text-gray-500">Total</td>
-                  <td className="border px-2 py-1.5 text-right text-green-700 bg-green-50/50">₹{totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                  <td colSpan={10} className="border px-2 py-1.5 text-right uppercase tracking-wider text-[10px] text-gray-500">Material Sub-total</td>
+                  <td className="border px-2 py-1.5 text-right text-gray-700 bg-gray-50">₹{totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                  <td className="border px-2 py-1.5"></td>
+                </tr>
+                {useStandardRate && Math.abs(roundOffAdjustment) >= 0.01 && (
+                  <tr className="text-gray-500 italic">
+                    <td colSpan={10} className="border px-2 py-1.5 text-right uppercase tracking-wider text-[10px]">Rounding Adjustment</td>
+                    <td className="border px-2 py-1.5 text-right">
+                      {roundOffAdjustment > 0 ? "+" : ""}₹{roundOffAdjustment.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="border px-2 py-1.5"></td>
+                  </tr>
+                )}
+                <tr className="bg-blue-50/30 text-blue-900">
+                  <td colSpan={10} className="border px-2 py-1.5 text-right uppercase tracking-wider text-[10px]">Grand Total</td>
+                  <td className="border px-2 py-1.5 text-right text-green-700 bg-green-50/50 font-black">₹{grandTotalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                   <td className="border px-2 py-1.5"></td>
                 </tr>
               </tfoot>
@@ -815,8 +873,19 @@ export default function GeneratePo() {
         });
       }
 
-      return acc + total;
+      const finalTotal = td.use_standard_rate ? calculateStandardTotal(td) : total;
+      return acc + finalTotal;
     }, 0);
+  };
+
+  const calculateStandardTotal = (td: any) => {
+    if (!td.materialLines || td.targetRequiredQty === undefined) return 0;
+    try {
+      const baseQty = Number(td.configBasis?.baseRequiredQty || 1);
+      const resBase = computeBoq({ ...td.configBasis, wastagePctDefault: 0 }, td.materialLines.map((l: any) => ({ ...l, applyWastage: false })), baseQty);
+      const standardRate = resBase.grandTotal / baseQty;
+      return standardRate * (td.targetRequiredQty || 0);
+    } catch { return 0; }
   };
 
   const selectedProject = projects.find(p => p.id === selectedProjectId);
@@ -1227,6 +1296,19 @@ export default function GeneratePo() {
           productTotal += (l.amount || 0);
         });
 
+        // Rounding Adjustment if standard rate is used
+        if (tableData.use_standard_rate) {
+          const baseQty = Number(tableData.configBasis?.baseRequiredQty || 1);
+          const resBase = computeBoq({ ...tableData.configBasis, wastagePctDefault: 0 }, tableData.materialLines.map((l: any) => ({ ...l, applyWastage: false })), baseQty);
+          const standardRate = resBase.grandTotal / baseQty;
+          const standardTotal = standardRate * (tableData.targetRequiredQty || 0);
+          const adj = standardTotal - productTotal;
+          if (Math.abs(adj) >= 0.01) {
+            exportData.push(["", "Rounding Adjustment", "", "", "", "", "", "", "", adj]);
+            productTotal = standardTotal;
+          }
+        }
+
         // Product total row
         exportData.push(["", "Product Total", "", "", "", "", "", "", "", productTotal]);
         exportData.push([]); // spacing
@@ -1394,6 +1476,21 @@ export default function GeneratePo() {
           ]);
           productTotal += (l.amount || 0);
         });
+
+        if (td.use_standard_rate) {
+          const baseQty = Number(td.configBasis?.baseRequiredQty || 1);
+          const resBase = computeBoq({ ...td.configBasis, wastagePctDefault: 0 }, td.materialLines.map((l: any) => ({ ...l, applyWastage: false })), baseQty);
+          const standardRate = resBase.grandTotal / baseQty;
+          const standardTotal = standardRate * (td.targetRequiredQty || 0);
+          const adj = standardTotal - productTotal;
+          if (Math.abs(adj) >= 0.01) {
+            tableBody.push([
+              { content: "Rounding Adjustment", colSpan: 9, styles: { halign: 'right', fontStyle: 'italic' } },
+              { content: adj.toFixed(2), styles: { fontStyle: 'italic', halign: 'right' } }
+            ]);
+            productTotal = standardTotal;
+          }
+        }
 
         // Product Subtotal Row
         tableBody.push([
