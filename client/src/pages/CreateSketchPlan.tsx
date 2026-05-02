@@ -1722,11 +1722,11 @@ export default function CreateSketchPlan() {
       try { lastSaved = JSON.parse(lastSavedRef.current || "{}"); } catch(e) {}
 
       // Identify modified items
-      const modifiedItems = items.filter(item => {
+      const modifiedItems = items.map((item, idx) => ({ ...item, sort_order: idx })).filter(item => {
         const original = (lastSaved.items || []).find((it: any) => it.id === item.id);
         if (!original) return true; // New item
         
-        // Simple structural comparison
+        // Include sort_order in comparison
         const currentClean = { ...item, images: [] };
         const originalClean = { ...original, images: [] };
         return JSON.stringify(currentClean) !== JSON.stringify(originalClean);

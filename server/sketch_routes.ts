@@ -589,7 +589,7 @@ export async function registerSketchRoutes(app: Express) {
               item.dimensions ? JSON.stringify(item.dimensions) : null,
               item.assigned_user_id || null, item.assigned_user_name || null,
               item.user_task_status || 'unassigned', item.category || null,
-              items.indexOf(item)
+              item.sort_order || 0
             ]
           );
 
