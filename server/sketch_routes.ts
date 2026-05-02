@@ -53,21 +53,10 @@ export async function registerSketchRoutes(app: Express) {
   });
 
   // Add versioning columns to sketch_plans (safe migration)
-  try {
-    await query(`ALTER TABLE sketch_plan_items ADD COLUMN IF NOT EXISTS user_task_status VARCHAR(50) DEFAULT 'unassigned'`);
-    await query(`ALTER TABLE sketch_plan_items ADD COLUMN IF NOT EXISTS category TEXT`);
-    await query(`ALTER TABLE sketch_plan_items ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE sketch_plans ADD COLUMN IF NOT EXISTS version_number INTEGER DEFAULT 1`);
-    await query(`ALTER TABLE sketch_plans ADD COLUMN IF NOT EXISTS parent_plan_id VARCHAR(100)`);
-    await query(`ALTER TABLE sketch_plans ADD COLUMN IF NOT EXISTS version_status VARCHAR(50) DEFAULT 'draft'`);
-
     // Performance indexes
     await query(`CREATE INDEX IF NOT EXISTS idx_sketch_templates_created_at ON sketch_templates (created_at DESC)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_sketch_plans_project_id ON sketch_plans (project_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_sketch_plan_items_plan_id ON sketch_plan_items (plan_id)`);
-
-    console.log("[db] sketch_plans version columns and indexes verified");
-  } catch (e) { console.warn("[db] sketch_plans version columns warning:", (e as any)?.message); }
 
   // GET /api/sketch-plans - List all sketch plans
   app.get("/api/sketch-plans", authMiddleware, async (req: Request, res: Response) => {
@@ -386,7 +375,8 @@ export async function registerSketchRoutes(app: Express) {
       if (items && Array.isArray(items)) {
         // Batch item inserts
         await Promise.all(items.map((item, i) => {
-          const itemId = item.id || `ski-${`${Date.now()}`.padStart(15, '0')}-${String(i).padStart(4, '0')}-${Math.random().toString(36).substr(2, 5)}`;
+          // ALWAYS generate a new ID for a brand new plan to avoid collisions with templates or other plans
+          const itemId = `ski-${`${Date.now()}`.padStart(15, '0')}-${String(i).padStart(4, '0')}-${Math.random().toString(36).substr(2, 5)}`;
           item.id = itemId; // Sync ID for image mapping
           return client.query(
             `INSERT INTO sketch_plan_items (id, plan_id, item_name, description, length, width, height, qty, unit, remarks, material_id, dimension_unit, assigned_vendor_id, vendor_name, dimensions, assigned_user_id, assigned_user_name, user_task_status, category, sort_order) 

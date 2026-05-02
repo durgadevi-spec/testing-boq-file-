@@ -773,6 +773,10 @@ export async function registerRoutes(
     await query(`ALTER TABLE sketch_plan_items ADD COLUMN IF NOT EXISTS assigned_user_name VARCHAR(255)`);
     await query(`ALTER TABLE sketch_plan_items ADD COLUMN IF NOT EXISTS user_task_status VARCHAR(50) DEFAULT 'unassigned'`);
     await query(`ALTER TABLE sketch_plan_items ADD COLUMN IF NOT EXISTS category TEXT`);
+    await query(`ALTER TABLE sketch_plan_items ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0`);
+    await query(`ALTER TABLE sketch_plans ADD COLUMN IF NOT EXISTS version_number INTEGER DEFAULT 1`);
+    await query(`ALTER TABLE sketch_plans ADD COLUMN IF NOT EXISTS parent_plan_id VARCHAR(100)`);
+    await query(`ALTER TABLE sketch_plans ADD COLUMN IF NOT EXISTS version_status VARCHAR(50) DEFAULT 'draft'`);
   } catch (err) {
     console.warn("[db] Could not add enhanced columns to sketch_plan_items:", (err as any)?.message || err);
   }
