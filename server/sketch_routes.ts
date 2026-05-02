@@ -105,9 +105,13 @@ export async function registerSketchRoutes(app: Express) {
             const srcItem = srcItems[i];
             const newItemId = `ski-${Date.now()}-${String(i).padStart(4, '0')}-${Math.random().toString(36).substr(2, 5)}`;
             await client.query(
-              `INSERT INTO sketch_plan_items (id, plan_id, item_name, description, length, width, height, qty, unit, remarks, material_id, dimension_unit, assigned_vendor_id, vendor_name)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-              [newItemId, newId, srcItem.item_name, srcItem.description, srcItem.length, srcItem.width, srcItem.height, srcItem.qty, srcItem.unit, srcItem.remarks, srcItem.material_id, srcItem.dimension_unit || 'feet', srcItem.assigned_vendor_id || null, srcItem.vendor_name || null]
+              `INSERT INTO sketch_plan_items (id, plan_id, item_name, description, length, width, height, qty, unit, remarks, material_id, dimension_unit, assigned_vendor_id, vendor_name, dimensions, assigned_user_id, assigned_user_name, user_task_status, category)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+              [
+                newItemId, newId, srcItem.item_name, srcItem.description, srcItem.length, srcItem.width, srcItem.height, srcItem.qty, srcItem.unit, srcItem.remarks, srcItem.material_id, srcItem.dimension_unit || 'feet', srcItem.assigned_vendor_id || null, srcItem.vendor_name || null,
+                srcItem.dimensions ? JSON.stringify(srcItem.dimensions) : null,
+                srcItem.assigned_user_id || null, srcItem.assigned_user_name || null, srcItem.user_task_status || 'unassigned', srcItem.category || null
+              ]
             );
 
             const srcItemImagesRes = await client.query("SELECT * FROM sketch_plan_images WHERE plan_id = $1 AND item_id = $2", [id, srcItem.id]);
@@ -186,12 +190,13 @@ export async function registerSketchRoutes(app: Express) {
           const safeVendorId = srcItem.assigned_vendor_id || null;
 
           await client.query(
-            `INSERT INTO sketch_plan_items (id, plan_id, item_name, description, length, width, height, qty, unit, remarks, material_id, dimension_unit, assigned_vendor_id, vendor_name, dimensions, assigned_user_id, assigned_user_name, user_task_status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+            `INSERT INTO sketch_plan_items (id, plan_id, item_name, description, length, width, height, qty, unit, remarks, material_id, dimension_unit, assigned_vendor_id, vendor_name, dimensions, assigned_user_id, assigned_user_name, user_task_status, category)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
             [
               newItemId, newId, srcItem.item_name, srcItem.description, srcItem.length, srcItem.width, srcItem.height, srcItem.qty, srcItem.unit, srcItem.remarks, safeMatId, srcItem.dimension_unit || 'feet', safeVendorId, srcItem.vendor_name || null,
               srcItem.dimensions ? JSON.stringify(srcItem.dimensions) : null,
-              srcItem.assigned_user_id || null, srcItem.assigned_user_name || null, srcItem.user_task_status || 'unassigned'
+              srcItem.assigned_user_id || null, srcItem.assigned_user_name || null, srcItem.user_task_status || 'unassigned',
+              srcItem.category || null
             ]
           );
 
@@ -342,73 +347,71 @@ export async function registerSketchRoutes(app: Express) {
       );
 
       if (items && Array.isArray(items)) {
-        // Deduplicate items to prevent doubles on initial save
-        const uniqueItems = Array.from(new Map(items.map(item => {
-          const key = item.id || `${item.item_name}|${item.description}|${item.qty}|${JSON.stringify(item.dimensions)}`;
-          return [key, item];
-        })).values());
-
-        for (let i = 0; i < uniqueItems.length; i++) {
-          const item = uniqueItems[i];
+        // Batch item inserts
+        await Promise.all(items.map((item, i) => {
           const itemId = item.id || `ski-${`${Date.now()}`.padStart(15, '0')}-${String(i).padStart(4, '0')}-${Math.random().toString(36).substr(2, 5)}`;
-          await client.query(
+          item.id = itemId; // Sync ID for image mapping
+          return client.query(
             `INSERT INTO sketch_plan_items (id, plan_id, item_name, description, length, width, height, qty, unit, remarks, material_id, dimension_unit, assigned_vendor_id, vendor_name, dimensions, assigned_user_id, assigned_user_name, user_task_status, category) 
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
             [
               itemId, id, item.item_name, item.description,
-              parseSafeNumeric(item.length),
-              parseSafeNumeric(item.width),
-              parseSafeNumeric(item.height),
-              parseSafeNumeric(item.qty),
-              item.unit, item.remarks,
-              item.material_id || null,
-              item.dimension_unit || 'feet',
-              item.assigned_vendor_id || null,
-              item.vendor_name || null,
+              parseSafeNumeric(item.length), parseSafeNumeric(item.width), parseSafeNumeric(item.height),
+              parseSafeNumeric(item.qty), item.unit, item.remarks,
+              item.material_id || null, item.dimension_unit || 'feet',
+              item.assigned_vendor_id || null, item.vendor_name || null,
               item.dimensions ? JSON.stringify(item.dimensions) : null,
-              item.assigned_user_id || null,
-              item.assigned_user_name || null,
-              item.user_task_status || 'unassigned',
-              item.category || null
+              item.assigned_user_id || null, item.assigned_user_name || null,
+              item.user_task_status || 'unassigned', item.category || null
             ]
           );
+        }));
 
+        // Batch all images
+        const allImages: any[] = [];
+        items.forEach(item => {
           if (item.images && Array.isArray(item.images)) {
-            for (const img of item.images) {
-              const imgUrl = typeof img === "string" ? img : (img.url || img.image_url);
-              const imgName = typeof img === "string" ? null : (img.name || img.image_name);
-              const imgId = `img-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-              await client.query(
-                `INSERT INTO sketch_plan_images (id, plan_id, item_id, image_url, image_name) VALUES ($1, $2, $3, $4, $5)`,
-                [imgId, id, itemId, imgUrl, imgName]
-              );
-            }
+            item.images.forEach(img => {
+              allImages.push({
+                item_id: item.id,
+                url: typeof img === "string" ? img : (img.url || img.image_url),
+                name: typeof img === "string" ? null : (img.name || img.image_name)
+              });
+            });
           }
+        });
+        if (images && Array.isArray(images)) {
+          images.forEach(img => {
+            if (!img.item_id) {
+              allImages.push({
+                item_id: null,
+                url: typeof img === "string" ? img : (img.image_url || img.url),
+                name: typeof img === "string" ? null : (img.name || img.image_name)
+              });
+            }
+          });
         }
-      }
 
-      if (images && Array.isArray(images)) {
-        for (const img of images) {
-          if (img.item_id) continue;
-          const imgUrl = typeof img === "string" ? img : (img.image_url || img.url);
-          const imgName = typeof img === "string" ? null : (img.name || img.image_name);
-          const imgId = `img-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-          await client.query(
-            `INSERT INTO sketch_plan_images (id, plan_id, item_id, image_url, image_name) VALUES ($1, $2, $3, $4, $5)`,
-            [imgId, id, null, imgUrl, imgName]
-          );
+        if (allImages.length > 0) {
+          await Promise.all(allImages.map(img => {
+            const imgId = `img-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+            return client.query(
+              `INSERT INTO sketch_plan_images (id, plan_id, item_id, image_url, image_name) VALUES ($1, $2, $3, $4, $5)`,
+              [imgId, id, img.item_id, img.url, img.name]
+            );
+          }));
         }
       }
 
       if (attachments && Array.isArray(attachments)) {
-        for (const att of attachments) {
+        await Promise.all(attachments.map(att => {
           const attId = `att-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-          await client.query(
+          return client.query(
             `INSERT INTO sketch_plan_attachments (id, plan_id, file_url, file_name, file_type) 
              VALUES ($1, $2, $3, $4, $5)`,
             [attId, id, att.file_url || att.url, att.file_name || att.name, att.file_type || att.type]
           );
-        }
+        }));
       }
 
       await client.query("COMMIT");
@@ -441,7 +444,7 @@ export async function registerSketchRoutes(app: Express) {
   app.put("/api/sketch-plans/:id", authMiddleware, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { name, project_id, location, plan_date, items, images } = req.body;
+      const { name, project_id, location, plan_date, items, images, attachments } = req.body;
 
       const client = await pool.connect();
       try {
@@ -459,7 +462,7 @@ export async function registerSketchRoutes(app: Express) {
         );
 
         // Intelligent update: Delete items not in the request, and upsert others
-        const incomingItemIds = (items || []).map((it: any) => it.id).filter((id: any) => id && id.startsWith('ski-'));
+        const incomingItemIds = (items || []).map((it: any) => it.id).filter((id: any) => id);
 
         // 1. Handle items: Remove those not in incoming list, then upsert
         if (incomingItemIds.length > 0) {
@@ -472,9 +475,11 @@ export async function registerSketchRoutes(app: Express) {
         await client.query("DELETE FROM sketch_plan_images WHERE plan_id = $1", [id]);
 
         if (items && Array.isArray(items)) {
-          for (const item of items) {
+          // Batch item upserts
+          await Promise.all(items.map((item, i) => {
             const itemId = (item.id && item.id.startsWith('ski-')) ? item.id : `ski-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
-            await client.query(
+            item.id = itemId; // Sync ID for image mapping
+            return client.query(
               `INSERT INTO sketch_plan_items (
                 id, plan_id, item_name, description, length, width, height, qty, unit, 
                 remarks, material_id, dimension_unit, assigned_vendor_id, vendor_name, 
@@ -517,48 +522,55 @@ export async function registerSketchRoutes(app: Express) {
                 item.category || null
               ]
             );
+          }));
 
-            // Re-insert item-level images
+          // Batch all images
+          const allImages: any[] = [];
+          items.forEach(item => {
             if (item.images && Array.isArray(item.images)) {
-              for (const img of item.images) {
-                const imgUrl = typeof img === "string" ? img : (img.url || img.image_url);
-                const imgName = typeof img === "string" ? null : (img.name || img.image_name);
-                const imgId = `img-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-                await client.query(
-                  `INSERT INTO sketch_plan_images (id, plan_id, item_id, image_url, image_name) VALUES ($1, $2, $3, $4, $5)`,
-                  [imgId, id, itemId, imgUrl, imgName]
-                );
-              }
+              item.images.forEach(img => {
+                allImages.push({
+                  item_id: item.id,
+                  url: typeof img === "string" ? img : (img.url || img.image_url),
+                  name: typeof img === "string" ? null : (img.name || img.image_name)
+                });
+              });
             }
+          });
+          if (images && Array.isArray(images)) {
+            images.forEach(img => {
+              if (!img.item_id) {
+                allImages.push({
+                  item_id: null,
+                  url: typeof img === "string" ? img : (img.image_url || img.url),
+                  name: typeof img === "string" ? null : (img.name || img.image_name)
+                });
+              }
+            });
           }
-        }
 
-        // Re-insert plan-level images
-        if (images && Array.isArray(images)) {
-          for (const img of images) {
-            if (img.item_id) continue;
-            const imgUrl = typeof img === "string" ? img : (img.image_url || img.url);
-            const imgName = typeof img === "string" ? null : (img.name || img.image_name);
-            const imgId = `img-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-            await client.query(
-              `INSERT INTO sketch_plan_images (id, plan_id, item_id, image_url, image_name) VALUES ($1, $2, $3, $4, $5)`,
-              [imgId, id, null, imgUrl, imgName]
-            );
+          if (allImages.length > 0) {
+            await Promise.all(allImages.map(img => {
+              const imgId = `img-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+              return client.query(
+                `INSERT INTO sketch_plan_images (id, plan_id, item_id, image_url, image_name) VALUES ($1, $2, $3, $4, $5)`,
+                [imgId, id, img.item_id, img.url, img.name]
+              );
+            }));
           }
         }
 
         // 3. Handle attachments: Clear and re-insert
         await client.query("DELETE FROM sketch_plan_attachments WHERE plan_id = $1", [id]);
-        const attachments = req.body.attachments;
         if (attachments && Array.isArray(attachments)) {
-          for (const att of attachments) {
+          await Promise.all(attachments.map(att => {
             const attId = `att-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-            await client.query(
+            return client.query(
               `INSERT INTO sketch_plan_attachments (id, plan_id, file_url, file_name, file_type) 
                VALUES ($1, $2, $3, $4, $5)`,
               [attId, id, att.file_url || att.url, att.file_name || att.name, att.file_type || att.type]
             );
-          }
+          }));
         }
 
         await client.query("COMMIT");

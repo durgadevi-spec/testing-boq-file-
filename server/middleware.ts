@@ -25,7 +25,13 @@ export function authMiddleware(
 
   console.log("[authMiddleware] authorization header:", authHeader);
 
-  const token = extractTokenFromHeader(authHeader);
+  let token = extractTokenFromHeader(authHeader);
+  
+  // FALLBACK to query parameter (useful for <img>, <a>, and direct downloads)
+  if (!token && req.query.token) {
+    token = req.query.token as string;
+    console.log("[authMiddleware] using token from query param");
+  }
 
   if (!token) {
     console.log("[authMiddleware] no token provided");
