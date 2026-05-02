@@ -338,8 +338,12 @@ export async function registerSketchRoutes(app: Express) {
         [id]
       );
 
+      const plan = planRes.rows[0];
       res.json({
-        plan: planRes.rows[0],
+        plan: {
+          ...plan,
+          category_order: plan.category_order || []
+        },
         items: itemsRes.rows || [],
         images: (imagesRes.rows || []).map(img => ({
           ...img,
@@ -472,7 +476,7 @@ export async function registerSketchRoutes(app: Express) {
     let client;
     try {
       const { id } = req.params;
-      const { name, project_id, location, plan_date, items, images, attachments, deletedItemIds, deletedImageIds, deletedAttachmentIds, isDelta } = req.body;
+      const { name, project_id, location, plan_date, items, images, attachments, deletedItemIds, deletedImageIds, deletedAttachmentIds, isDelta, category_order } = req.body;
 
       client = await pool.connect();
       await client.query("BEGIN");
@@ -485,8 +489,11 @@ export async function registerSketchRoutes(app: Express) {
 
       const finalPlanDate = (plan_date && plan_date.trim() !== "") ? plan_date : null;
       await client.query(
-        `UPDATE sketch_plans SET name = $1, project_id = $2, location = $3, plan_date = $4, updated_at = NOW() WHERE id = $5`,
-        [name, project_id || null, location || null, finalPlanDate, id]
+        `UPDATE sketch_plans SET 
+           name = $1, project_id = $2, location = $3, plan_date = $4, updated_at = NOW(),
+           category_order = $5
+         WHERE id = $6`,
+        [name, project_id || null, location || null, finalPlanDate, category_order ? JSON.stringify(category_order) : null, id]
       );
 
       // Handle deletions

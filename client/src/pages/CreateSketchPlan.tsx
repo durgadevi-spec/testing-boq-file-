@@ -149,7 +149,7 @@ const PhotoColumn = ({
       </DialogTrigger>
       <DialogContent className="max-w-2xl z-[120]">
         <DialogHeader>
-          <DialogTitle>Item {category === "pre" ? "Pre-work" : "Post-work"} Photos - {item.item_name || `Item ${idx + 1}`}</DialogTitle>
+          <DialogTitle>Item {category === "pre" ? "Pre-work" : "Post-work"} Photos - {item.item_name || `Item ${displayIdx}`}</DialogTitle>
         </DialogHeader>
         <div
           className="grid grid-cols-4 gap-4 py-4 max-h-[60vh] overflow-y-auto"
@@ -227,7 +227,7 @@ const PhotoColumn = ({
 
 // Row Component for Drag and Drop
 const SketchPlanRow = React.memo(({
-  item, idx, itemsLength, updateItem, setOpenNotesIdx, removeItem, moveItemToPosition, selectMaterial,
+  item, idx, displayIdx, itemsLength, updateItem, setOpenNotesIdx, removeItem, moveItemToPosition, selectMaterial,
   searchResults, searching, loadMaterials, materialSearch, setMaterialSearch,
   openPopoverIdx, setOpenPopoverIdx, renameRowImage, removeRowImage,
   handleRowImageUpload, isLocked, isFiltering, isCompact, setPreviewImage,
@@ -266,8 +266,11 @@ const SketchPlanRow = React.memo(({
       </td>
       <td className={cn("px-1", isCompact ? "py-0" : "py-2")}>
         <Select value={String(idx + 1)} onValueChange={(val) => moveItemToPosition(idx, parseInt(val) - 1)} disabled={isLocked || itemsLength <= 1}>
-          <SelectTrigger className="w-12 h-6 text-[10px] p-1 border-slate-200">
-            <SelectValue />
+          <SelectTrigger className="w-[52px] h-6 text-[10px] p-1 border-slate-200">
+            <div className="flex items-center justify-center gap-1 w-full">
+              <span className="font-bold text-indigo-600">{displayIdx}</span>
+              <span className="text-slate-400 text-[8px] opacity-70">#{idx + 1}</span>
+            </div>
           </SelectTrigger>
           <SelectContent className="min-w-[3rem] max-h-40">
             {Array.from({ length: itemsLength }).map((_, i) => (
@@ -304,7 +307,7 @@ const SketchPlanRow = React.memo(({
 
           <DialogContent className="sm:max-w-[750px] max-h-[90vh] flex flex-col p-0">
             <DialogHeader className="p-6 pb-2">
-              <DialogTitle>Notes for {item.item_name || `Item ${idx + 1}`}</DialogTitle>
+              <DialogTitle>Notes for {item.item_name || `Item ${displayIdx}`}</DialogTitle>
             </DialogHeader>
             <div className="flex-1 overflow-y-auto p-6 pt-2 custom-scrollbar space-y-4">
               <div>
@@ -471,7 +474,7 @@ const SketchPlanRow = React.memo(({
             <Draggable nodeRef={dialogRef} handle=".drag-handle">
               <div ref={dialogRef} className="bg-white border shadow-lg sm:rounded-lg pointer-events-auto flex flex-col w-full relative">
                 <DialogHeader className="p-4 border-b drag-handle cursor-move bg-slate-50 hover:bg-slate-100 transition-colors select-none rounded-t-lg flex flex-row items-center justify-between">
-                  <DialogTitle>Select Item for Row #{idx + 1}</DialogTitle>
+                  <DialogTitle>Select Item for Row #{displayIdx}</DialogTitle>
                   <DialogClose className="rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
                     <X className="h-4 w-4" />
                     <span className="sr-only">Close</span>
@@ -795,8 +798,19 @@ export default function CreateSketchPlan() {
   const [isEmailDialogOpen, setIsEmailDialogOpen] = useState(false);
   const [recipientEmail, setRecipientEmail] = useState("");
   const [sendingEmail, setSendingEmail] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [categoryOrder, setCategoryOrder] = useState<string[]>([]);
+
+  useEffect(() => {
+    // Automatically add new categories to the end of categoryOrder
+    const currentCats = Array.from(new Set(items.map(it => it.category).filter(Boolean))) as string[];
+    const newCats = currentCats.filter(cat => !categoryOrder.includes(cat));
+    if (newCats.length > 0) {
+      setCategoryOrder(prev => [...prev, ...newCats]);
+    }
+  }, [items, categoryOrder]);
+
+  const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [isCompact, setIsCompact] = useState(false);
@@ -1165,6 +1179,14 @@ export default function CreateSketchPlan() {
           setProjectId(p.project_id || "none");
           setProjectName(p.project_name || "");
           setLocationStr(p.location || "");
+          if (data.plan && data.plan.category_order) {
+            setCategoryOrder(Array.isArray(data.plan.category_order) ? data.plan.category_order : []);
+          } else {
+            // Fallback: derive from items if not stored
+            const cats = Array.from(new Set(data.items.map((it: any) => it.category).filter(Boolean))) as string[];
+            setCategoryOrder(cats.sort());
+          }
+
           if (p.plan_date) setPlanDate(new Date(p.plan_date).toISOString().split("T")[0]);
 
           setIsLocked(!!p.is_locked);
@@ -1766,6 +1788,7 @@ export default function CreateSketchPlan() {
         deletedItemIds,
         deletedImageIds,
         deletedAttachmentIds,
+        category_order: categoryOrder,
         isDelta: true
       };
 
@@ -1891,7 +1914,7 @@ export default function CreateSketchPlan() {
       toast({ title: "Preparing PDF", description: "Processing images, please wait..." });
 
       // Pre-process all images to ensure compatibility (WEBP/large images)
-      const processedItems = await Promise.all(items.map(async (item) => {
+      const processedItems = await Promise.all(filteredItems.map(async (item) => {
         const preImg = item.preImages && item.preImages.length > 0 ? await prepareImageForPdf(item.preImages[0].url) : null;
         const postImg = item.postImages && item.postImages.length > 0 ? await prepareImageForPdf(item.postImages[0].url) : null;
         return { ...item, _pdfPre: preImg, _pdfPost: postImg };
@@ -1942,7 +1965,7 @@ export default function CreateSketchPlan() {
           const row: any[] = [];
           headers.forEach(h => {
             if (h === "#") {
-              row.push(dIdx === 0 ? idx + 1 : "");
+              row.push(dIdx === 0 ? sortedAllItems.indexOf(item) + 1 : "");
             } else if (h === "Item") {
               row.push(dIdx === 0 ? item.item_name : "");
             } else if (h === "Notes") {
@@ -2125,12 +2148,12 @@ export default function CreateSketchPlan() {
 
       // 2. Prepare Table Data
       const tableData: any[] = [];
-      items.forEach((item, idx) => {
+      filteredItems.forEach((item, idx) => {
         const itemDims = (includeSubNotesInExport && item.dimensions?.length) ? item.dimensions : [{ id: "def", length: item.length, width: item.width, height: item.height, note: item.description }];
 
         itemDims.forEach((dim: any, dIdx: number) => {
           const row: any = {};
-          if (selectedPdfCols.includes("#")) row["S.No"] = dIdx === 0 ? idx + 1 : "";
+          if (selectedPdfCols.includes("#")) row["S.No"] = dIdx === 0 ? sortedAllItems.indexOf(item) + 1 : "";
           if (selectedPdfCols.includes("Item")) row["Item Name"] = dIdx === 0 ? item.item_name : "";
           if (selectedPdfCols.includes("Notes")) row["Notes"] = dIdx === 0 ? item.description : (dim.note || "");
           if (selectedPdfCols.includes("L")) row["L"] = dim.length || "";
@@ -2370,14 +2393,35 @@ export default function CreateSketchPlan() {
     });
   };
 
-  const filteredItems = React.useMemo(() => {
-    return items.filter(it =>
+  const sortedAllItems = React.useMemo(() => {
+    const baseItems = items.filter(it =>
       (isSupplier ? it.assigned_vendor_id === (user as any)?.shopId : true) &&
       ((it.item_name || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (it.description || "").toLowerCase().includes(searchTerm.toLowerCase())) &&
-      (categoryFilter === "all" || it.category === categoryFilter)
+        (it.description || "").toLowerCase().includes(searchTerm.toLowerCase()))
     );
-  }, [items, searchTerm, categoryFilter, isSupplier, user]);
+
+    if (categoryOrder.length === 0) return baseItems;
+
+    return [...baseItems].sort((a, b) => {
+      const indexA = categoryOrder.indexOf(a.category || "");
+      const indexB = categoryOrder.indexOf(b.category || "");
+
+      if (indexA !== -1 && indexB !== -1) {
+        if (indexA !== indexB) return indexA - indexB;
+      } else if (indexA !== -1) {
+        return -1;
+      } else if (indexB !== -1) {
+        return 1;
+      }
+      // Within same category or both unassigned, use item sort_order
+      return (a.sort_order || 0) - (b.sort_order || 0);
+    });
+  }, [items, searchTerm, categoryOrder, isSupplier, user]);
+
+  const filteredItems = React.useMemo(() => {
+    if (categoryFilter === "all") return sortedAllItems;
+    return sortedAllItems.filter(it => it.category === categoryFilter);
+  }, [sortedAllItems, categoryFilter]);
 
   const isFiltering = filteredItems.length !== items.length;
 
@@ -2704,21 +2748,37 @@ export default function CreateSketchPlan() {
                 <div className="border-t pt-3 relative bg-slate-50/30 px-4 -mx-4">
                   <div className="overflow-x-auto pb-1 custom-scrollbar scroll-smooth">
                     <Tabs value={categoryFilter} onValueChange={setCategoryFilter} className="w-full">
-                      <TabsList className="bg-transparent p-0 w-max flex justify-start h-10 flex-nowrap gap-1">
-                        <TabsTrigger value="all" className="text-[10px] font-black px-6 h-9 uppercase tracking-widest rounded-t-lg border-x border-t border-transparent data-[state=active]:border-slate-200 data-[state=active]:bg-white data-[state=active]:text-indigo-600 transition-all">
+                      <TabsList className="bg-transparent p-0 flex justify-start h-10 flex-nowrap gap-1 w-full overflow-visible">
+                        <TabsTrigger value="all" className="text-[10px] font-black px-6 h-9 uppercase tracking-widest rounded-t-lg border-x border-t border-transparent data-[state=active]:border-slate-200 data-[state=active]:bg-white data-[state=active]:text-indigo-600 transition-all shrink-0">
                           All ({items.length})
                         </TabsTrigger>
-                        {(() => {
-                          const categoriesWithCounts = items.reduce((acc: Record<string, number>, it) => {
-                            if (it.category) acc[it.category] = (acc[it.category] || 0) + 1;
-                            return acc;
-                          }, {});
-                          return Object.entries(categoriesWithCounts).sort(([a], [b]) => a.localeCompare(b)).map(([cat, count]) => (
-                            <TabsTrigger key={cat} value={cat} className="text-[10px] font-black px-6 h-9 uppercase tracking-widest rounded-t-lg border-x border-t border-transparent data-[state=active]:border-slate-200 data-[state=active]:bg-white data-[state=active]:text-indigo-600 transition-all">
-                              {cat} ({count})
-                            </TabsTrigger>
-                          ));
-                        })()}
+
+                        <Reorder.Group
+                          axis="x"
+                          values={categoryOrder}
+                          onReorder={setCategoryOrder}
+                          className="flex h-10 gap-1 overflow-visible"
+                          as="div"
+                        >
+                          {categoryOrder.map((cat) => {
+                            const count = items.filter(it => it.category === cat).length;
+                            if (count === 0 && cat !== categoryFilter) return null;
+                            return (
+                              <Reorder.Item
+                                key={cat}
+                                value={cat}
+                                className="relative select-none shrink-0"
+                              >
+                                <TabsTrigger
+                                  value={cat}
+                                  className="text-[10px] font-black px-6 h-9 uppercase tracking-widest rounded-t-lg border-x border-t border-transparent data-[state=active]:border-slate-200 data-[state=active]:bg-white data-[state=active]:text-indigo-600 transition-all whitespace-nowrap"
+                                >
+                                  {cat} ({count})
+                                </TabsTrigger>
+                              </Reorder.Item>
+                            );
+                          })}
+                        </Reorder.Group>
                       </TabsList>
                     </Tabs>
                   </div>
@@ -2910,11 +2970,12 @@ export default function CreateSketchPlan() {
                         setItems(newOrder);
                         if (sortBy !== "none") setSortBy("none");
                       }} key={sortBy}>
-                        {paginatedItems.map((item, idx) => (
+                        {paginatedItems.map((item, pIdx) => (
                           <SketchPlanRow
                             key={item.id}
                             item={item}
                             idx={items.indexOf(item)}
+                            displayIdx={sortedAllItems.indexOf(item) + 1}
                             itemsLength={items.length}
                             isLocked={isLocked || userRole === "supplier"}
                             isFiltering={isFiltering}
