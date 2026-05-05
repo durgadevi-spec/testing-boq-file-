@@ -34,6 +34,17 @@ import { useToast } from "@/hooks/use-toast";
 import apiFetch from "@/lib/api";
 import { computeBoq } from "@/lib/boqCalc";
 import { useAuth } from "@/lib/auth-context";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
+
 
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -47,7 +58,10 @@ import {
   EyeOff,
   Edit2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Briefcase,
+
   MapPin,
   IndianRupee,
   Lock,
@@ -542,7 +556,99 @@ export default function FinalizeBoq() {
       return p.project_status === projectStatusFilter;
     });
   }, [projects, projectStatusFilter, projectSearchTerm]);
+  const [boqSearchTerm, setBoqSearchTerm] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+
+  const filteredBoqItems = React.useMemo(() => {
+    return boqItems.filter(item => {
+      let td = item.table_data || {};
+      if (typeof td === "string") try { td = JSON.parse(td); } catch { td = {}; }
+      
+      // Deep scan for category
+      let itemCat = td.category || (item as any).category || "";
+      if (!itemCat) {
+        if (Array.isArray(td.materialLines)) {
+          for (const line of td.materialLines) {
+            if (line.category) { itemCat = line.category; break; }
+          }
+        }
+        if (!itemCat && Array.isArray(td.step11_items)) {
+          for (const s11 of td.step11_items) {
+            if (s11.category) { itemCat = s11.category; break; }
+          }
+        }
+        if (!itemCat && td.product_info?.category) itemCat = td.product_info.category;
+      }
+      
+      // Filter by search term
+      if (boqSearchTerm) {
+        const name = td.product_name || item.estimator || "";
+        const desc = td.finalize_description || td.subcategory || "";
+        if (!fuzzySearch(boqSearchTerm, [name, desc, itemCat])) return false;
+      }
+      
+      // Filter by category
+      if (categoryFilter !== "all") {
+        if (itemCat !== categoryFilter) return false;
+      }
+
+
+      
+      return true;
+    });
+  }, [boqItems, boqSearchTerm, categoryFilter]);
+
+  const totalPages = Math.ceil(filteredBoqItems.length / pageSize);
+  const paginatedBoqItems = React.useMemo(() => {
+    return filteredBoqItems.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  }, [filteredBoqItems, currentPage, pageSize]);
+
+  // Reset to page 1 when filter changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [boqSearchTerm, categoryFilter]);
+
+  const availableCategories = React.useMemo(() => {
+    const cats = new Set<string>();
+    boqItems.forEach(item => {
+      let td = item.table_data || {};
+      if (typeof td === "string") try { td = JSON.parse(td); } catch { td = {}; }
+      
+      // 1. Direct check
+      let cat = td.category || (item as any).category;
+      
+      // 2. Deep scan if missing
+      if (!cat) {
+        // Check in materialLines (common for calculated products)
+        if (Array.isArray(td.materialLines)) {
+          for (const line of td.materialLines) {
+            if (line.category) { cat = line.category; break; }
+          }
+        }
+        // Check in step11_items
+        if (!cat && Array.isArray(td.step11_items)) {
+          for (const s11 of td.step11_items) {
+            if (s11.category) { cat = s11.category; break; }
+          }
+        }
+        // Check in product_info/template_data
+        if (!cat && td.product_info?.category) cat = td.product_info.category;
+      }
+
+      if (cat && typeof cat === 'string' && cat.trim()) {
+        cats.add(cat.trim());
+      }
+    });
+    return Array.from(cats).sort();
+  }, [boqItems]);
+
+
+
   const [savingLayoutId, setSavingLayoutId] = useState<string | null>(null);
+
+
   const [showColumnTotals, setShowColumnTotals] = useState(true);
   const [hideSystemTotalFooter, setHideSystemTotalFooter] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -793,7 +899,7 @@ export default function FinalizeBoq() {
     let totalQtySum = 0;
     let overrideTotalSum = 0;
 
-    boqItems.forEach(item => {
+    filteredBoqItems.forEach(item => {
       let td = item.table_data || {};
       if (typeof td === "string") try { td = JSON.parse(td); } catch { td = {}; }
 
@@ -858,7 +964,8 @@ export default function FinalizeBoq() {
     });
 
     return { totals, totalValueSum, totalRateSum, totalQtySum, overrideTotalSum };
-  }, [boqItems, allCols, customColumns, customColumnValues, productQuantities, overrideRates]);
+  }, [filteredBoqItems, allCols, customColumns, customColumnValues, productQuantities, overrideRates]);
+
 
   const handleColumnReorder = async (newOrder: typeof allCols) => {
     // Optimistically update local state for all items
@@ -3442,7 +3549,81 @@ export default function FinalizeBoq() {
               )}
             </div>
 
+            {/* Search and Category Filters */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-4">
+              <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+                <div className="relative w-full max-w-md">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <Input
+                    value={boqSearchTerm}
+                    onChange={(e) => setBoqSearchTerm(e.target.value)}
+                    placeholder="Search product name, category or description..."
+                    className="pl-10 h-11 border-slate-200 shadow-sm focus:ring-blue-500 rounded-lg text-sm"
+                  />
+                  {boqSearchTerm && (
+                    <button 
+                      onClick={() => setBoqSearchTerm("")}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Per Page:</span>
+                    <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
+                      <SelectTrigger className="w-[85px] h-9 bg-slate-50 border-slate-200 text-xs font-bold">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="10">10 Items</SelectItem>
+                        <SelectItem value="25">25 Items</SelectItem>
+                        <SelectItem value="50">50 Items</SelectItem>
+                        <SelectItem value="100">100 Items</SelectItem>
+                        <SelectItem value="5000">Show All</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  
+                  <div className="text-[11px] font-bold text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200">
+                    Showing <span className="text-blue-600">{filteredBoqItems.length}</span> of <span className="text-slate-400">{boqItems.length}</span> Items
+                  </div>
+                </div>
+              </div>
+
+              {availableCategories.length > 0 && (
+                <div className="border-t pt-3 overflow-x-auto">
+                  <Tabs value={categoryFilter} onValueChange={setCategoryFilter} className="w-full">
+                    <TabsList className="bg-slate-100/50 p-1 flex justify-start h-auto flex-nowrap gap-1">
+                      <TabsTrigger 
+                        value="all" 
+                        className="text-[10px] font-bold px-4 py-2 uppercase tracking-wider data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all shrink-0"
+                      >
+                        All ({boqItems.length})
+                      </TabsTrigger>
+                      {availableCategories.map(cat => (
+                        <TabsTrigger 
+                          key={cat}
+                          value={cat} 
+                          className="text-[10px] font-bold px-4 py-2 uppercase tracking-wider data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all shrink-0"
+                        >
+                          {cat} ({boqItems.filter(i => {
+                            let td = i.table_data;
+                            if (typeof td === 'string') try { td = JSON.parse(td); } catch { td = {}; }
+                            return td.category === cat;
+                          }).length})
+                        </TabsTrigger>
+                      ))}
+                    </TabsList>
+                  </Tabs>
+                </div>
+              )}
+            </div>
+
             {boqItems.length === 0 ? (
+
               <Card>
                 <CardContent className="text-gray-500 text-center py-10">
                   No products found for this version. Go to Create BOM to add products.
@@ -3709,6 +3890,84 @@ export default function FinalizeBoq() {
                     </div>
                   )}
 
+                {/* Pagination Navigation */}
+                {totalPages > 1 && (
+                  <div className="py-3 px-6 border-b bg-slate-50/50 flex flex-col md:flex-row items-center justify-between gap-4">
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 w-8 p-0"
+                        onClick={() => setCurrentPage(1)}
+                        disabled={currentPage === 1}
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        <ChevronLeft className="h-4 w-4 -ml-2" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 w-8 p-0"
+                        onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                        disabled={currentPage === 1}
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </Button>
+                      
+                      <div className="flex items-center gap-1 mx-2">
+                        {Array.from({ length: Math.min(5, totalPages) }).map((_, i) => {
+                          let pageNum = 1;
+                          if (totalPages <= 5) pageNum = i + 1;
+                          else if (currentPage <= 3) pageNum = i + 1;
+                          else if (currentPage >= totalPages - 2) pageNum = totalPages - 4 + i;
+                          else pageNum = currentPage - 2 + i;
+                          
+                          if (pageNum <= 0 || pageNum > totalPages) return null;
+
+                          return (
+                            <Button
+                              key={pageNum}
+                              variant={currentPage === pageNum ? "default" : "outline"}
+                              size="sm"
+                              className={cn(
+                                "h-8 min-w-[32px] px-2 text-[11px] font-bold",
+                                currentPage === pageNum ? "bg-blue-600 hover:bg-blue-700" : ""
+                              )}
+                              onClick={() => setCurrentPage(pageNum)}
+                            >
+                              {pageNum}
+                            </Button>
+                          );
+                        })}
+                      </div>
+
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 w-8 p-0"
+                        onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                        disabled={currentPage === totalPages}
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 w-8 p-0"
+                        onClick={() => setCurrentPage(totalPages)}
+                        disabled={currentPage === totalPages}
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                        <ChevronRight className="h-4 w-4 -ml-2" />
+                      </Button>
+                    </div>
+
+                    <div className="text-[11px] font-bold text-slate-500 uppercase tracking-tight">
+                      Page <span className="text-blue-600 font-black">{currentPage}</span> of {totalPages}
+                    </div>
+                  </div>
+                )}
+
                 <div className="overflow-x-auto">
                   <table className="border-collapse text-sm min-w-full">
                     <thead>
@@ -3864,7 +4123,7 @@ export default function FinalizeBoq() {
                           if (col.hideColumn) return null;
                           return (
                             <DraggableHeaderCol
-                              key={col.name}
+                                            key={col.name}
                               col={col}
                               idx={realIdx}
                               isVersionSubmitted={isVersionSubmitted}
@@ -3878,6 +4137,7 @@ export default function FinalizeBoq() {
                               customColumnValues={customColumnValues}
                               saveItemLayout={saveItemLayout}
                               toast={toast}
+
                               setCustomColumns={setCustomColumns}
                               setCustomColumnValues={setCustomColumnValues}
                               setGlobalColSettings={setGlobalColSettings}
@@ -3891,7 +4151,9 @@ export default function FinalizeBoq() {
                       axis="y"
                       values={boqItems}
                       onReorder={async (newItems) => {
+                        if (boqSearchTerm || categoryFilter !== "all" || paginatedBoqItems.length < boqItems.length) return;
                         setBoqItems(newItems);
+
                         if (isVersionSubmitted) return;
 
                         try {
@@ -3920,7 +4182,9 @@ export default function FinalizeBoq() {
                       }}
                       as="tbody"
                     >
-                      {boqItems.map((boqItem, boqIdx) => {
+                      {paginatedBoqItems.map((boqItem, boqIdx) => {
+
+
                         let tableData = boqItem.table_data || {};
                         if (typeof tableData === "string") {
                           try { tableData = JSON.parse(tableData); } catch { tableData = {}; }
@@ -3933,7 +4197,21 @@ export default function FinalizeBoq() {
                         const productName = (derivedProductName === "Manual Product" || derivedProductName === "Manual" || boqItem.estimator === "manual_product" || boqItem.estimator === "Manual")
                           ? (currentStep11Items[0]?.title || currentStep11Items[0]?.description || derivedProductName)
                           : derivedProductName;
-                        const category = tableData.category || "";
+                        let category = tableData.category || (boqItem as any).category || "";
+                        if (!category) {
+                          if (Array.isArray(tableData.materialLines)) {
+                            for (const line of tableData.materialLines) {
+                              if (line.category) { category = line.category; break; }
+                            }
+                          }
+                          if (!category && Array.isArray(tableData.step11_items)) {
+                            for (const s11 of tableData.step11_items) {
+                              if (s11.category) { category = s11.category; break; }
+                            }
+                          }
+                          if (!category && tableData.product_info?.category) category = tableData.product_info.category;
+                        }
+
                         const isSelected = selectedProductIds.has(boqItem.id);
 
                         let total = 0;
@@ -3975,8 +4253,11 @@ export default function FinalizeBoq() {
                             {!hiddenPredefinedCols.sno && (
                               <td className="border-r px-2 py-1.5 text-center bg-gray-50/50 align-middle" style={{ cursor: "grab" }}>
                                 <div className="flex flex-col items-center gap-1">
-                                  <span className="text-[10px] font-bold text-gray-500">{boqIdx + 1}</span>
+                                  <span className="text-[10px] font-bold text-gray-500">
+                                    {boqItems.findIndex(i => i.id === boqItem.id) + 1}
+                                  </span>
                                   <div className="text-gray-300 hover:text-blue-400 transition-colors flex items-center justify-center">
+
                                     <GripVertical size={14} className="mx-auto" />
                                   </div>
                                 </div>
@@ -4559,6 +4840,85 @@ export default function FinalizeBoq() {
                       />
                     </CardContent>
                   </Card>
+
+                {/* Bottom Pagination Navigation */}
+                {totalPages > 1 && (
+                  <div className="mt-4 py-3 px-6 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 w-8 p-0"
+                        onClick={() => setCurrentPage(1)}
+                        disabled={currentPage === 1}
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        <ChevronLeft className="h-4 w-4 -ml-2" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 w-8 p-0"
+                        onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                        disabled={currentPage === 1}
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </Button>
+                      
+                      <div className="flex items-center gap-1 mx-2">
+                        {Array.from({ length: Math.min(5, totalPages) }).map((_, i) => {
+                          let pageNum = 1;
+                          if (totalPages <= 5) pageNum = i + 1;
+                          else if (currentPage <= 3) pageNum = i + 1;
+                          else if (currentPage >= totalPages - 2) pageNum = totalPages - 4 + i;
+                          else pageNum = currentPage - 2 + i;
+                          
+                          if (pageNum <= 0 || pageNum > totalPages) return null;
+
+                          return (
+                            <Button
+                              key={pageNum}
+                              variant={currentPage === pageNum ? "default" : "outline"}
+                              size="sm"
+                              className={cn(
+                                "h-8 min-w-[32px] px-2 text-[11px] font-bold",
+                                currentPage === pageNum ? "bg-blue-600 hover:bg-blue-700" : ""
+                              )}
+                              onClick={() => setCurrentPage(pageNum)}
+                            >
+                              {pageNum}
+                            </Button>
+                          );
+                        })}
+                      </div>
+
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 w-8 p-0"
+                        onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                        disabled={currentPage === totalPages}
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 w-8 p-0"
+                        onClick={() => setCurrentPage(totalPages)}
+                        disabled={currentPage === totalPages}
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                        <ChevronRight className="h-4 w-4 -ml-2" />
+                      </Button>
+                    </div>
+
+                    <div className="text-[11px] font-bold text-slate-500 uppercase tracking-tight">
+                      Page <span className="text-blue-600 font-black">{currentPage}</span> of {totalPages}
+                    </div>
+                  </div>
+                )}
+
                 </div>
 
                 {/* Grand Total Section */}
