@@ -2532,13 +2532,31 @@ export default function CreateBom() {
     if (!selectedVersionId || isRefreshingCategories) return;
     setIsRefreshingCategories(true);
     try {
-      // Step 1: Fetch master product list
-      const pr = await apiFetch("/api/products");
-      if (!pr.ok) throw new Error("Failed to fetch products");
-      const pd = await pr.json();
-      const prodById: Record<string, any> = Object.fromEntries(
-        (pd.products || []).map((p: any) => [p.id, p])
-      );
+      // Step 1: Fetch master data
+      const [prodRes, catRes, matRes] = await Promise.all([
+        apiFetch("/api/products"),
+        apiFetch("/api/categories"),
+        apiFetch("/api/material-templates")
+      ]);
+
+      if (!prodRes.ok || !catRes.ok || !matRes.ok) throw new Error("Failed to fetch master data");
+
+      const pd = await prodRes.json();
+      const cd = await catRes.json();
+      const md = await matRes.json();
+
+      const masterCategories = new Set((cd.categories || []).map((c: string) => c.toLowerCase().trim()));
+      const prodById = Object.fromEntries((pd.products || []).map((p: any) => [p.id, p]));
+      const matById = Object.fromEntries((md.templates || []).map((m: any) => [m.id, m]));
+
+      // Get all known category names to distinguish from custom Areas
+      const allMasterProductCategories = new Set((pd.products || []).map((p: any) => (p.category || "").trim()).filter(Boolean));
+      const allMasterMaterialCategories = new Set((md.templates || []).map((m: any) => (m.category || "").trim()).filter(Boolean));
+      const allKnownCategories = new Set([
+        ...masterCategories,
+        ...Array.from(allMasterProductCategories).map(c => c.toLowerCase()),
+        ...Array.from(allMasterMaterialCategories).map(c => c.toLowerCase())
+      ]);
 
       // Step 2: Detect mismatches and build update queue
       const changeLog: { itemName: string; from: string; to: string }[] = [];
@@ -2546,57 +2564,102 @@ export default function CreateBom() {
 
       for (const item of boqItems) {
         const td = parseTableData(item.table_data);
-        if (!td.product_id) continue; // skip standalone/manual items
-
-        const prod = prodById[td.product_id];
-        if (!prod) continue; // product removed from library – skip safely
-
-        const currentCat = (td.category_name || td.category || "General").trim();
-        const latestCat = (prod.category || "General").trim();
-
-        if (currentCat.toLowerCase() === latestCat.toLowerCase()) continue; // no change
-
-        // Step 3: Surgically patch only the category fields
-        const updatedTd = { ...td, category: latestCat, category_name: latestCat };
+        let hasChanges = false;
+        let updatedTd = JSON.parse(JSON.stringify(td)); // Deep copy to avoid mutations
         const itemName = td.product_name || item.estimator || "Unknown Item";
 
-        const task = apiFetch(`/api/boq-items/${item.id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ table_data: updatedTd }),
-        }).then(async (res) => {
-          if (res.ok) {
-            // Update local React state immediately (no reload needed)
-            setBoqItems(prev =>
-              prev.map(bi =>
-                bi.id === item.id ? { ...bi, table_data: updatedTd } : bi
-              )
-            );
-            changeLog.push({ itemName, from: currentCat, to: latestCat });
-          } else {
-            console.warn(`Refresh: failed to update item ${item.id}`);
+        // A) Update Product-level Category (only if it matches a known category or is empty/"General")
+        // This protects "Areas" like "Hall", "Kitchen" which users enter manually.
+        if (td.product_id) {
+          const masterProd = prodById[td.product_id];
+          if (masterProd) {
+            const currentCatName = (td.category_name || "").trim();
+            const currentCat = (td.category || "").trim();
+            const latestProdCat = (masterProd.category || "General").trim();
+
+            const isCatNameAKnownCat = allKnownCategories.has(currentCatName.toLowerCase()) || currentCatName === "" || currentCatName.toLowerCase() === "general";
+            const isCatAKnownCat = allKnownCategories.has(currentCat.toLowerCase()) || currentCat === "" || currentCat.toLowerCase() === "general";
+
+            if (isCatNameAKnownCat && currentCatName.toLowerCase() !== latestProdCat.toLowerCase()) {
+              updatedTd.category_name = latestProdCat;
+              hasChanges = true;
+              changeLog.push({ itemName: `${itemName} (Group)`, from: currentCatName || "General", to: latestProdCat });
+            }
+            if (isCatAKnownCat && currentCat.toLowerCase() !== latestProdCat.toLowerCase()) {
+              updatedTd.category = latestProdCat;
+              hasChanges = true;
+              if (currentCat !== currentCatName) {
+                changeLog.push({ itemName: `${itemName} (Field)`, from: currentCat || "General", to: latestProdCat });
+              }
+            }
           }
-        });
-        updateTasks.push(task);
+        }
+
+        // B) Update Material Line Categories (inside the product)
+        const refreshLines = (lines: any[]) => {
+          if (!Array.isArray(lines)) return lines;
+          let linesChanged = false;
+          const newLines = lines.map(line => {
+            const matId = line.id || line.material_id;
+            if (!matId) return line;
+            const masterMat = matById[matId];
+            if (masterMat) {
+              const currentLineCat = (line.category || "General").trim();
+              const latestMatCat = (masterMat.category || "General").trim();
+              if (currentLineCat.toLowerCase() !== latestMatCat.toLowerCase()) {
+                hasChanges = true;
+                linesChanged = true;
+                changeLog.push({ itemName: line.name || line.title || "Material", from: currentLineCat, to: latestMatCat });
+                return { ...line, category: latestMatCat };
+              }
+            }
+            return line;
+          });
+          return linesChanged ? newLines : lines;
+        };
+
+        if (updatedTd.materialLines) {
+          updatedTd.materialLines = refreshLines(updatedTd.materialLines);
+        }
+        if (updatedTd.step11_items) {
+          updatedTd.step11_items = refreshLines(updatedTd.step11_items);
+        }
+
+        if (hasChanges) {
+          const task = apiFetch(`/api/boq-items/${item.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ table_data: updatedTd }),
+          }).then(async (res) => {
+            if (res.ok) {
+              setBoqItems(prev =>
+                prev.map(bi =>
+                  bi.id === item.id ? { ...bi, table_data: updatedTd } : bi
+                )
+              );
+            } else {
+              console.warn(`Refresh: failed to update item ${item.id}`);
+            }
+          });
+          updateTasks.push(task);
+        }
       }
 
-      // Step 4: Run all updates in parallel (fast even for large BOMs)
+      // Step 3: Run all updates in parallel (fast even for large BOMs)
       await Promise.all(updateTasks);
 
-      // Step 5: Show result
+      // Step 4: Show result
       if (changeLog.length === 0) {
         toast({
           title: "Already Up to Date",
-          description: "All item categories match the master product library.",
+          description: "All item categories match the master library.",
         });
       } else {
         setRefreshLog(changeLog);
         setShowRefreshLogDialog(true);
         toast({
-          title: "Categories Refreshed",
-          description: `${changeLog.length} item ${
-            changeLog.length === 1 ? "category" : "categories"
-          } updated successfully.`,
+          title: "Refresh Complete",
+          description: `${changeLog.length} category details updated successfully.`,
         });
       }
     } catch (err) {
