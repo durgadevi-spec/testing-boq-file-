@@ -3054,7 +3054,9 @@ export default function CreateBom() {
           const sRate = Number(getEditedValue(itemKey, "supply_rate", it.supply_rate ?? 0)) || 0;
           const iRate = Number(getEditedValue(itemKey, "install_rate", it.install_rate ?? 0)) || 0;
           const rate = Number(getEditedValue(itemKey, "rate", sRate + iRate)) || (sRate + iRate);
-          const scaledQty = Number((baseQty * target).toFixed(2));
+          const u = getEditedValue(itemKey, "unit", it.unit || "nos");
+          const isLumpSum = u.toLowerCase() === "ls";
+          const scaledQty = isLumpSum ? baseQty : Number((baseQty * target).toFixed(2));
           cardTotal += Number((scaledQty * rate).toFixed(2));
         });
       }
@@ -3414,6 +3416,22 @@ export default function CreateBom() {
     if (!selectedProduct || !selectedProjectId || !selectedVersionId) return;
     setTargetQtyModalOpen(false);
     try {
+      // Apply all edited fields to pendingItems before saving
+      const updatedPendingItems = pendingItems.map((item, idx) => {
+        const itemKey = `${selectedVersionId}-pending-${idx}`;
+        const edited = editedFieldsRef.current[itemKey] || {};
+        return {
+          ...item,
+          qty: edited.qty !== undefined ? edited.qty : item.qty,
+          unit: edited.unit !== undefined ? edited.unit : item.unit,
+          supply_rate: edited.supply_rate !== undefined ? edited.supply_rate : item.supply_rate,
+          install_rate: edited.install_rate !== undefined ? edited.install_rate : item.install_rate,
+          description: edited.description !== undefined ? edited.description : item.description,
+          rate: edited.rate !== undefined ? edited.rate : item.rate,
+          category: item.category
+        };
+      });
+
       const configRes = await apiFetch(`/api/product-step3-config/${selectedProduct.id}`);
       let configBasis: any = null; let materialLines: any[] = [];
       if (configRes.ok) {
@@ -3442,7 +3460,7 @@ export default function CreateBom() {
       }
       if (!configBasis) {
         configBasis = { requiredUnitType: "Sqft" as UnitType, baseRequiredQty: 1, wastagePctDefault: 0 };
-        materialLines = pendingItems.map(i => ({ materialId: i.id || Math.random().toString(), materialName: i.title || "Item", unit: i.unit || "nos", baseQty: i.qty || 1, supplyRate: i.supply_rate || 0, installRate: i.install_rate || 0, category: i.category || "General" }));
+        materialLines = updatedPendingItems.map(i => ({ materialId: i.id || Math.random().toString(), materialName: i.title || "Item", unit: i.unit || "nos", baseQty: i.qty || 1, supplyRate: i.supply_rate || 0, installRate: i.install_rate || 0, category: i.category || "General" }));
       }
       const tableData = {
         product_name: selectedProduct.name,
@@ -3459,8 +3477,8 @@ export default function CreateBom() {
         configBasis,
         total_cost: configBasis?.total_cost || 0,
         materialLines,
-        step11_items: pendingItems.map(i => ({ ...i, category: i.category || "General" })),
-        finalize_description: pendingItems[0]?.description || "",
+        step11_items: updatedPendingItems.map(i => ({ ...i, category: i.category || "General" })),
+        finalize_description: updatedPendingItems[0]?.description || "",
         created_at: new Date().toISOString()
       };
 
@@ -3746,14 +3764,16 @@ export default function CreateBom() {
     return step11.map((it: any, idx: number) => {
       const key = `${boqItem.id}-${idx}`;
       const baseQty = Number(getEditedValue(key, "qty", it.qty ?? 0)) || 0;
-      const scaledQty = Number((baseQty * target).toFixed(2));
+      const itemUnit = getEditedValue(key, "unit", it.unit ?? "");
+      const isLumpSum = itemUnit.toLowerCase() === "ls";
+      const scaledQty = isLumpSum ? baseQty : Number((baseQty * target).toFixed(2));
       return {
         ...it,
         qty: scaledQty,
         supply_rate: getEditedValue(key, "supply_rate", it.supply_rate ?? 0),
         install_rate: getEditedValue(key, "install_rate", it.install_rate ?? 0),
         description: getEditedValue(key, "description", it.description ?? ""),
-        unit: getEditedValue(key, "unit", it.unit ?? "")
+        unit: itemUnit
       };
     });
   };
@@ -3812,10 +3832,13 @@ export default function CreateBom() {
             const rate = Number(getEditedValue(itemKey, "rate", sRate + iRate)) || (sRate + iRate);
             const desc = getEditedValue(itemKey, "description", it.description || "");
             const u = getEditedValue(itemKey, "unit", it.unit || "nos");
+            // LS qty should not be scaled by targetRequiredQty - it's always a fixed amount
+            const isLumpSum = u.toLowerCase() === "ls";
+            const displayQty = isLumpSum ? qty : qty;
             return {
               ...it, manual: true, itemKey, _s11Idx: s11Idx, qtyPerSqf: it.qtyPerSqf ?? 0,
-              requiredQty: qty, roundOff: "-", description: desc, unit: u,
-              rateSqft: rate, amount: Number((qty * rate).toFixed(2))
+              requiredQty: displayQty, roundOff: "-", description: desc, unit: u,
+              rateSqft: rate, amount: Number((displayQty * rate).toFixed(2))
             };
           }).filter(Boolean);
           displayLines = [...computedLines, ...manualStep11];
@@ -3826,12 +3849,13 @@ export default function CreateBom() {
           displayLines = step11Items.map((it: any, s11Idx: number) => {
             const itemKey = it.itemKey || `${boqItem.id}-${s11Idx}`;
             const baseQty = Number(getEditedValue(itemKey, "qty", it.qty ?? 0)) || 0;
-            const scaledQty = Number((baseQty * target).toFixed(2));
+            const u = getEditedValue(itemKey, "unit", it.unit || "nos");
+            const isLumpSum = u.toLowerCase() === "ls";
+            const scaledQty = isLumpSum ? baseQty : Number((baseQty * target).toFixed(2));
             const sRate = Number(getEditedValue(itemKey, "supply_rate", it.supply_rate ?? 0)) || 0;
             const iRate = Number(getEditedValue(itemKey, "install_rate", it.install_rate ?? 0)) || 0;
             const rate = Number(getEditedValue(itemKey, "rate", sRate + iRate)) || (sRate + iRate);
             const desc = getEditedValue(itemKey, "description", it.description || "");
-            const u = getEditedValue(itemKey, "unit", it.unit || "nos");
             return {
               ...it, itemKey, _s11Idx: s11Idx,
               qtyPerSqf: baseQty, requiredQty: scaledQty, roundOff: "-", description: desc, unit: u,
@@ -4022,11 +4046,13 @@ export default function CreateBom() {
           displayLines = step11Items.map((it: any, idx: number) => {
             const key = it.itemKey || `${boqItem.id}-${idx}`;
             const baseQty = Number(getEditedValue(key, "qty", it.qty ?? 0)) || 0;
-            const scaledQty = Number((baseQty * target).toFixed(2));
+            const u = getEditedValue(key, "unit", it.unit || "nos");
+            const isLumpSum = u.toLowerCase() === "ls";
+            const scaledQty = isLumpSum ? baseQty : Number((baseQty * target).toFixed(2));
             const rate = Number(getEditedValue(key, "rate", (it.supply_rate ?? 0) + (it.install_rate ?? 0)));
             return {
               ...it, title: it.title, description: getEditedValue(key, "description", it.description || ""),
-              unit: getEditedValue(key, "unit", it.unit || "nos"), qtyPerSqf: baseQty, requiredQty: scaledQty, roundOff: "-",
+              unit: u, qtyPerSqf: baseQty, requiredQty: scaledQty, roundOff: "-",
               rate, amount: scaledQty * rate, image: it.image
             };
           });
