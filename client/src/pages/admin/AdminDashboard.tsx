@@ -692,7 +692,11 @@ export default function AdminDashboard() {
 
   // Get SubCategories for selected Category
   const getSubCategoriesForCategory = (category: string) => {
-    return subCategories.filter((sc: any) => sc.category === category);
+    if (!category) return [];
+    const normalizedTarget = category.toLowerCase().trim();
+    return subCategories.filter((sc: any) => 
+      (sc.category || "").toLowerCase().trim() === normalizedTarget
+    );
   };
 
   // Handle Add Product
@@ -1221,22 +1225,33 @@ export default function AdminDashboard() {
 
   const handleEditMaterial = (mat: any) => {
     setEditingMaterialId(mat.id);
+    
+    // Find the correct category name from our master list to ensure Select component matches exactly (case-insensitive match)
+    const rawCategory = mat.category || "";
+    const matchedCategory = categories.find(c => c.toLowerCase().trim() === rawCategory.toLowerCase().trim()) || rawCategory;
+    
+    // Similarly normalize subcategory name
+    const rawSubCategory = mat.subcategory || mat.sub_category || mat.subCategory || "";
+    const matchedSubCategory = subCategories.find(s => s.name.toLowerCase().trim() === rawSubCategory.toLowerCase().trim())?.name || rawSubCategory;
+
+    // Similarly normalize product name
+    const rawProductName = mat.product || "";
+    const matchedProduct = products.find(p => p.name.toLowerCase().trim() === rawProductName.toLowerCase().trim())?.name || rawProductName;
+
     setNewMaterial({
       name: mat.name || "",
       code: mat.code || "",
       rate: mat.rate || 0,
       unit: mat.unit || "pcs",
-      // Handle various naming conventions from DB and frontend
-      category: mat.category || "",
-      subCategory: mat.subcategory || mat.sub_category || mat.subCategory || "",
-      product: mat.product || "",
+      category: matchedCategory,
+      subCategory: matchedSubCategory,
+      product: matchedProduct,
       brandName: mat.brandname || mat.brand_name || mat.brandName || "",
       modelNumber: mat.modelnumber || mat.model_number || mat.modelNumber || "",
       technicalSpecification: mat.technicalspecification || mat.technical_specification || mat.technicalSpecification || "",
       dimensions: mat.dimensions || "",
       finish: mat.finishtype || mat.finish || "",
       metalType: mat.metaltype || mat.metal_type || mat.metalType || "",
-      // Ensure shopId is a string for the Select component
       shopId: mat.shop_id ? mat.shop_id.toString() : (mat.shopId ? mat.shopId.toString() : ""),
     });
   };
@@ -1371,6 +1386,40 @@ export default function AdminDashboard() {
   // Editing states
   const [editingShopId, setEditingShopId] = useState<string | null>(null);
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
+
+  // Sync newMaterial fields with master lists when they load to prevent blank dropdowns
+  useEffect(() => {
+    if (editingMaterialId && categories.length > 0) {
+      setNewMaterial(prev => {
+        if (!prev.category) return prev;
+        const matched = categories.find(c => c.toLowerCase().trim() === prev.category.toLowerCase().trim());
+        if (matched && matched !== prev.category) return { ...prev, category: matched };
+        return prev;
+      });
+    }
+  }, [categories, editingMaterialId]);
+
+  useEffect(() => {
+    if (editingMaterialId && subCategories.length > 0) {
+      setNewMaterial(prev => {
+        if (!prev.subCategory) return prev;
+        const matched = subCategories.find(s => s.name.toLowerCase().trim() === prev.subCategory.toLowerCase().trim())?.name;
+        if (matched && matched !== prev.subCategory) return { ...prev, subCategory: matched };
+        return prev;
+      });
+    }
+  }, [subCategories, editingMaterialId]);
+
+  useEffect(() => {
+    if (editingMaterialId && products.length > 0) {
+      setNewMaterial(prev => {
+        if (!prev.product) return prev;
+        const matched = products.find(p => p.name.toLowerCase().trim() === prev.product.toLowerCase().trim())?.name;
+        if (matched && matched !== prev.product) return { ...prev, product: matched };
+        return prev;
+      });
+    }
+  }, [products, editingMaterialId]);
 
   // State for support message
   const [supportMsg, setSupportMsg] = useState("");
@@ -2226,8 +2275,8 @@ export default function AdminDashboard() {
                                           <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent className="max-h-60 overflow-y-auto">
-                                          {products.filter((p: any) => p.subcategory === newMaterial.subCategory).map((p: any) => (
-                                            <SelectItem key={p.id} value={p.name}>{p.name} {"(Subcategory: "}{p.subcategory_name}{")"}</SelectItem>
+                                          {products.filter((p: any) => (p.subcategory || p.subcategory_name || "").toLowerCase().trim() === (newMaterial.subCategory || "").toLowerCase().trim()).map((p: any) => (
+                                            <SelectItem key={p.id} value={p.name}>{p.name} {"(Subcategory: "}{p.subcategory_name || p.subcategory}{")"}</SelectItem>
                                           ))}
                                         </SelectContent>
                                       </Select>

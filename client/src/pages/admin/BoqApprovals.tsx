@@ -418,8 +418,18 @@ export default function BoqApprovals() {
                                                             sysTotal = currentStep11Items.reduce((s: number, it: any) => s + (Number(it.qty) || 0) * (Number(it.supply_rate || 0) + Number(it.install_rate || 0)), 0);
                                                             baseRate = (currentStep11Items[0]?.qty ?? 0) > 0 ? sysTotal / (currentStep11Items[0]?.qty || 1) : sysTotal;
                                                         }
-                                                        const overrideRate = Number(td.finalize_override_rate || 0);
-                                                        const overrideTotal = overrideRate * qty;
+                                                        
+                                                        // Calculate effective override rate based on type
+                                                        const overrideInputVal = Number(td.finalize_override_rate || 0);
+                                                        const overrideType = td.finalize_override_type || 'value';
+                                                        let effectiveOverrideRate = 0;
+                                                        if (overrideType === 'percentage') {
+                                                          effectiveOverrideRate = sysTotal * overrideInputVal / 100 / qty;
+                                                        } else {
+                                                          effectiveOverrideRate = overrideInputVal;
+                                                        }
+                                                        
+                                                        const overrideTotal = effectiveOverrideRate * qty;
                                                         return (
                                                             <TableRow key={item.id} className="hover:bg-slate-50/50">
                                                                 <TableCell className="font-medium text-slate-500 border-r">{idx + 1}</TableCell>
@@ -512,7 +522,17 @@ export default function BoqApprovals() {
                                                                 const currentStep11Items = Array.isArray(td.step11_items) ? td.step11_items : [];
                                                                 sysTotal = currentStep11Items.reduce((s: number, it: any) => s + (Number(it.qty) || 0) * (Number(it.supply_rate || 0) + Number(it.install_rate || 0)), 0);
                                                             }
-                                                            const overrideTotal = Number(td.finalize_override_rate || 0) * qty;
+                                                            
+                                                            // Calculate effective override total based on type
+                                                            const overrideInputVal = Number(td.finalize_override_rate || 0);
+                                                            const overrideType = td.finalize_override_type || 'value';
+                                                            let overrideTotal = 0;
+                                                            if (overrideType === 'percentage') {
+                                                              overrideTotal = sysTotal * overrideInputVal / 100;
+                                                            } else {
+                                                              overrideTotal = overrideInputVal * qty;
+                                                            }
+                                                            
                                                             let runningTotal = overrideTotal > 0 ? overrideTotal : sysTotal;
                                                             let accumulator = 0;
                                                             const rowCalculatedValues: Record<string, number> = {};

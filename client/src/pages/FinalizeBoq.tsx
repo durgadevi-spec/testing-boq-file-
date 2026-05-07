@@ -319,10 +319,10 @@ const DraggableHeaderCol = ({
     const updates = boqItems.map(item => {
       // 2. Update column definitions and dependent references
       const itemCols = [...(customColumns[item.id] || [])].map(c => {
-         let newC = { ...c };
-         if (newC.baseSource === oldName) newC.baseSource = newName;
-         if (newC.multiplierSource === oldName) newC.multiplierSource = newName;
-         return newC;
+        let newC = { ...c };
+        if (newC.baseSource === oldName) newC.baseSource = newName;
+        if (newC.multiplierSource === oldName) newC.multiplierSource = newName;
+        return newC;
       });
 
       const colIdx = itemCols.findIndex(c => c.name === oldName);
@@ -582,14 +582,14 @@ export default function FinalizeBoq() {
       let td = item.table_data || {};
       if (typeof td === "string") try { td = JSON.parse(td); } catch { td = {}; }
       const itemCat = getItemCategory(item);
-      
+
       // Filter by search term
       if (boqSearchTerm) {
         const name = td.product_name || item.estimator || "";
         const desc = td.finalize_description || td.subcategory || "";
         if (!fuzzySearch(boqSearchTerm, [name, desc, itemCat])) return false;
       }
-      
+
       // Filter by category
       if (categoryFilter !== "all") {
         if (itemCat !== categoryFilter) return false;
@@ -600,6 +600,9 @@ export default function FinalizeBoq() {
 
     // Sort items to match the Generate BOM category order (only when showing all)
     if (savedOrder.length > 0 && categoryFilter === "all" && !boqSearchTerm) {
+      // Create a map of IDs to their original positions in boqItems to ensure secondary stability
+      const originalPos = new Map(boqItems.map((it, idx) => [it.id, idx]));
+      
       filtered.sort((a, b) => {
         const catA = getItemCategory(a);
         const catB = getItemCategory(b);
@@ -607,9 +610,14 @@ export default function FinalizeBoq() {
         const idxB = savedOrder.indexOf(catB);
         const orderA = idxA === -1 ? savedOrder.length : idxA;
         const orderB = idxB === -1 ? savedOrder.length : idxB;
-        return orderA - orderB;
+        
+        if (orderA !== orderB) return orderA - orderB;
+        
+        // Secondary sort by original position in boqItems
+        return (originalPos.get(a.id) || 0) - (originalPos.get(b.id) || 0);
       });
     }
+
 
     return filtered;
   }, [boqItems, boqSearchTerm, categoryFilter, bomVersions, selectedBomVersionId]);
@@ -712,12 +720,12 @@ export default function FinalizeBoq() {
 
   // BOQ versions: show draft and approved so users can work on them
   const filteredBoqVersions = React.useMemo(() => {
-    return boqVersions.filter(v => 
-      v.status === "draft" || 
-      v.status === "approved" || 
-      v.status === "submitted" || 
-      v.status === "pending_approval" || 
-      v.status === "rejected" || 
+    return boqVersions.filter(v =>
+      v.status === "draft" ||
+      v.status === "approved" ||
+      v.status === "submitted" ||
+      v.status === "pending_approval" ||
+      v.status === "rejected" ||
       v.status === "edit_requested"
     );
   }, [boqVersions]);
@@ -917,24 +925,42 @@ export default function FinalizeBoq() {
       let td = item.table_data || {};
       if (typeof td === "string") try { td = JSON.parse(td); } catch { td = {}; }
 
-      const { itemRate, itemQty } = getItemMetrics(td);
+      const { itemRate, itemQty, itemTotal } = getItemMetrics(td);
+
 
       const manualQtyStr = productQuantities[item.id];
-      const isLumpSum = td.is_lump_sum || productUnits[item.id]?.toLowerCase() === 'ls';
+      const isLumpSum = td.is_lump_sum === true || (productUnits[item.id] || "").trim().toLowerCase() === 'ls';
+
       const displayQty = isLumpSum ? 1 : (manualQtyStr !== undefined
         ? (parseFloat(manualQtyStr) || 0)
         : itemQty);
 
-      const baseTotalValue = roundOff ? Math.round(itemRate * displayQty) : itemRate * displayQty;
+      const baseRate = isLumpSum ? itemTotal : itemRate;
+      const baseTotalValue = roundOff ? Math.round(baseRate * displayQty) : baseRate * displayQty;
       totalValueSum += baseTotalValue;
-      totalRateSum += roundOff ? Math.round(itemRate) : itemRate;
+      totalRateSum += roundOff ? Math.round(baseRate) : baseRate;
 
-      const overrideRateRaw = parseFloat(overrideRates[item.id] || "0") || 0;
-      const overrideRate = roundOff ? Math.round(overrideRateRaw) : overrideRateRaw;
-      const overrideTotalVal = roundOff ? Math.round(overrideRate * displayQty) : overrideRate * displayQty;
+
+      const overrideType = overrideTypes[item.id] ?? globalOverrideType;
+      const overrideInputVal = parseFloat(overrideRates[item.id] ?? globalOverrideValue ?? "0") || 0;
+
+
+      const overrideRateRaw = (overrideType === "percentage") 
+        ? (baseRate * (1 + overrideInputVal / 100)) 
+        : (overrideInputVal !== 0 ? overrideInputVal : baseRate);
+
+
+
+
+      let overrideTotalVal = overrideRateRaw * displayQty;
+
+      const overrideRate = overrideRateRaw;
+      if (roundOff) {
+        overrideTotalVal = Math.round(overrideTotalVal);
+      }
       overrideTotalSum += overrideTotalVal;
 
-      let currentItemRunningTotal = overrideRate > 0 ? overrideTotalVal : baseTotalValue;
+      let currentItemRunningTotal = (overrideRates[item.id] || globalOverrideValue) ? overrideTotalVal : baseTotalValue;
       let accumulator = 0;
       const rowCalculatedValues: { [colName: string]: number } = {};
 
@@ -978,7 +1004,7 @@ export default function FinalizeBoq() {
     });
 
     return { totals, totalValueSum, totalRateSum, totalQtySum, overrideTotalSum };
-  }, [filteredBoqItems, allCols, customColumns, customColumnValues, productQuantities, overrideRates]);
+  }, [filteredBoqItems, allCols, customColumns, customColumnValues, productQuantities, overrideRates, overrideTypes, globalOverrideType, globalOverrideValue, roundOff]);
 
 
   const handleColumnReorder = async (newOrder: typeof allCols) => {
@@ -1329,7 +1355,12 @@ export default function FinalizeBoq() {
             const typeValues = Object.values(restoredOverrideTypes);
             const percentageCount = typeValues.filter(t => t === 'percentage').length;
             const valueCount = typeValues.filter(t => t === 'value').length;
-            setGlobalOverrideType(percentageCount > valueCount ? 'percentage' : 'value');
+            // Strongly default to percentage mode
+            if (valueCount > percentageCount) {
+              setGlobalOverrideType('value');
+            } else {
+              setGlobalOverrideType('percentage');
+            }
           }
           setHideSystemTotalFooter(sysTotalHidden);
           setGrandTotalColumn(restoredGrandTotalCol);
@@ -1604,9 +1635,12 @@ export default function FinalizeBoq() {
     boqItems.forEach(item => {
       let td = item.table_data || {};
       if (typeof td === "string") try { td = JSON.parse(td); } catch { td = {}; }
-      const { itemRate, itemQty } = getItemMetrics(td);
-      const displayQty = productQuantities[item.id] !== undefined ? (parseFloat(productQuantities[item.id]) || 0) : itemQty;
-      const baseTotalValue = itemRate * displayQty;
+      const { itemRate, itemQty, itemTotal } = getItemMetrics(td);
+      const isLS = (productUnits[item.id] || td.unit || "").trim().toLowerCase() === 'ls';
+      const displayQty = isLS ? 1 : (productQuantities[item.id] !== undefined ? (parseFloat(productQuantities[item.id]) || 0) : itemQty);
+      const baseRate = isLS ? itemTotal : itemRate;
+      const baseTotalValue = baseRate * displayQty;
+
 
       let itemCols = [...(customColumns[item.id] || [])];
       let colIdx = itemCols.findIndex(c => c.name === colName);
@@ -1620,10 +1654,20 @@ export default function FinalizeBoq() {
       const currentRowMultiplier = itemCol?.percentageValue || oldMultiplier;
       const newRowMultiplier = currentRowMultiplier + deltaMultiplier;
 
-      const overrideRate = parseFloat(overrideRates[item.id] || "0") || 0;
+      const oType = overrideTypes[item.id] ?? globalOverrideType;
+      const oInput = parseFloat(overrideRates[item.id] || globalOverrideValue || "0") || 0;
+      const effectiveOverrideRate = (oType === "percentage")
+        ? (baseRate * (1 + oInput / 100))
+        : (oInput !== 0 ? oInput : baseRate);
+
+
+
+
+      const overrideTotal = effectiveOverrideRate * displayQty;
+
       const srcCtx: SrcCtx = {
         totalVal: baseTotalValue, rate: itemRate, qty: displayQty,
-        overrideRate, overrideTotal: overrideRate * displayQty,
+        overrideRate: effectiveOverrideRate, overrideTotal: overrideTotal,
         rowCalc: {}, customVals: customColumnValues[item.id]?.[0] || {},
       };
       const rowBase = baseSource === "manual" ? base : resolveSource(baseSource, srcCtx);
@@ -1667,13 +1711,30 @@ export default function FinalizeBoq() {
 
       let td = item.table_data || {};
       if (typeof td === "string") try { td = JSON.parse(td); } catch { td = {}; }
-      const { itemRate, itemQty } = getItemMetrics(td);
-      const displayQty = productQuantities[item.id] !== undefined ? (parseFloat(productQuantities[item.id]) || 0) : itemQty;
+      const { itemRate, itemQty, itemTotal } = getItemMetrics(td);
+      const isLS = (productUnits[item.id] || td.unit || "").trim().toLowerCase() === 'ls';
+      const displayQty = isLS ? 1 : (productQuantities[item.id] !== undefined ? (parseFloat(productQuantities[item.id]) || 0) : itemQty);
+      const baseRate = isLS ? itemTotal : itemRate;
 
-      const overrideRate = parseFloat(overrideRates[item.id] || "0") || 0;
+
+      const oType = overrideTypes[item.id] ?? globalOverrideType;
+      const oInput = parseFloat(overrideRates[item.id] || globalOverrideValue || "0") || 0;
+      let effectiveOverrideRate = 0;
+      let overrideTotal = 0;
+
+      if (oType === "percentage") {
+        overrideTotal = (baseRate * displayQty) * oInput / 100;
+        effectiveOverrideRate = displayQty > 0 ? overrideTotal / displayQty : overrideTotal;
+      } else {
+        effectiveOverrideRate = oInput;
+        overrideTotal = effectiveOverrideRate * displayQty;
+      }
+
+
       const srcCtx: SrcCtx = {
-        totalVal: itemRate * displayQty, rate: itemRate, qty: displayQty,
-        overrideRate, overrideTotal: overrideRate * displayQty,
+        totalVal: baseRate * displayQty, rate: baseRate, qty: displayQty,
+        overrideRate: effectiveOverrideRate, overrideTotal: overrideTotal,
+
         rowCalc: {}, customVals: customColumnValues[item.id]?.[0] || {},
       };
       const rowBase = baseSource === "manual" ? base : resolveSource(baseSource, srcCtx);
@@ -1724,12 +1785,28 @@ export default function FinalizeBoq() {
     const baseSource = baseSourceOverride || itemCol.baseSource || "Total Value (₹)";
     let td = item.table_data || {};
     if (typeof td === "string") try { td = JSON.parse(td); } catch { td = {}; }
-    const { itemRate, itemQty } = getItemMetrics(td);
-    const displayQty = productQuantities[item.id] !== undefined ? (parseFloat(productQuantities[item.id]) || 0) : itemQty;
-    const overrideRate = parseFloat(overrideRates[item.id] || "0") || 0;
+    const { itemRate, itemQty, itemTotal } = getItemMetrics(td);
+    const isLS = (productUnits[item.id] || td.unit || "").trim().toLowerCase() === 'ls';
+    const displayQty = isLS ? 1 : (productQuantities[item.id] !== undefined ? (parseFloat(productQuantities[item.id]) || 0) : itemQty);
+    const baseRate = isLS ? itemTotal : itemRate;
+
+    const oType = overrideTypes[item.id] ?? globalOverrideType;
+
+    const oInput = parseFloat(overrideRates[item.id] || globalOverrideValue || "0") || 0;
+
+    const effectiveOverrideRate = (oType === "percentage")
+      ? (baseRate * (1 + oInput / 100))
+      : (oInput !== 0 ? oInput : baseRate);
+
+
+
+
+    const overrideTotal = effectiveOverrideRate * displayQty;
+
     const srcCtx: SrcCtx = {
-      totalVal: itemRate * displayQty, rate: itemRate, qty: displayQty,
-      overrideRate, overrideTotal: overrideRate * displayQty,
+      totalVal: baseRate * displayQty, rate: baseRate, qty: displayQty,
+      overrideRate: effectiveOverrideRate, overrideTotal: overrideTotal,
+
       rowCalc: {}, customVals: customColumnValues[item.id]?.[0] || {},
     };
     const rowBase = baseSource === "manual" ? 0 : resolveSource(baseSource, srcCtx);
@@ -2074,13 +2151,26 @@ export default function FinalizeBoq() {
       const updates = boqItems.map(item => {
         let td = item.table_data || {};
         if (typeof td === 'string') try { td = JSON.parse(td); } catch { td = {}; }
-        const { itemRate, itemQty } = getItemMetrics(td);
-        const displayQty = parseFloat(productQuantities[item.id] ?? td.finalize_qty ?? itemQty) || 0;
-        const totalVal = itemRate * displayQty;
-        const oRate = parseFloat(overrideRates[item.id] ?? td.finalize_override_rate ?? "0") || 0;
+        const { itemRate, itemQty, itemTotal } = getItemMetrics(td);
+        const isLS = (productUnits[item.id] || td.unit || "").trim().toLowerCase() === 'ls';
+        const displayQty = isLS ? 1 : (productQuantities[item.id] !== undefined ? (parseFloat(productQuantities[item.id]) || 0) : itemQty);
+        const baseRate = isLS ? itemTotal : itemRate;
+
+        const totalVal = baseRate * displayQty;
+        const oType = overrideTypes[item.id] ?? td.finalize_override_type ?? globalOverrideType;
+        const oInput = parseFloat(overrideRates[item.id] ?? td.finalize_override_rate ?? globalOverrideValue ?? "0") || 0;
+        let oRate = 0;
+        if (oType === "percentage") {
+          oRate = baseRate * (1 + oInput / 100);
+        } else {
+          oRate = oInput !== 0 ? oInput : baseRate;
+        }
+
+
+
 
         let accumulator = 0;
-        let runningTotal = oRate > 0 ? oRate * displayQty : totalVal;
+        let runningTotal = (overrideRates[item.id] || td.finalize_override_rate || globalOverrideValue) ? oRate * displayQty : totalVal;
         const rowVals: Record<string, string> = { ...(customColumnValues[item.id]?.[0] || {}) };
         const rowCalculated: Record<string, number> = {};
 
@@ -2216,7 +2306,8 @@ export default function FinalizeBoq() {
           : derivedProductName;
         const category = tableData.category || "";
 
-        const isLumpSum = tableData.is_lump_sum === true || productUnits[boqItem.id]?.toLowerCase() === 'ls';
+        const isLumpSum = tableData.is_lump_sum === true || (productUnits[boqItem.id] || "").trim().toLowerCase() === 'ls';
+
         const manualQtyStr = productQuantities[boqItem.id];
         const displayQty = isLumpSum ? 1 : (manualQtyStr !== undefined
           ? (parseFloat(manualQtyStr) || 0)
@@ -2247,19 +2338,23 @@ export default function FinalizeBoq() {
 
         const rowValues: { [colName: string]: any } = {};
         const rowCalculatedValues: { [colName: string]: number } = {};
-        
+
         // Calculate effective override rate based on type
         const overrideType = globalOverrideType;
         const overrideInputVal = parseFloat((overrideRates[boqItem.id] ?? globalOverrideValue) || "0") || 0;
         let effectiveOverrideRate = 0;
         if (overrideType === "percentage") {
-          effectiveOverrideRate = totalVal * overrideInputVal / 100 / displayQty;
+          effectiveOverrideRate = rateSqft * (1 + overrideInputVal / 100);
+
+
         } else {
-          effectiveOverrideRate = overrideInputVal;
+          effectiveOverrideRate = overrideInputVal !== 0 ? overrideInputVal : rateSqft;
         }
-        
+
+
         const overrideTotalVal = effectiveOverrideRate * displayQty;
-        let currentRunningTotal = effectiveOverrideRate > 0 ? overrideTotalVal : totalVal;
+        let currentRunningTotal = (overrideRates[boqItem.id] || globalOverrideValue) ? overrideTotalVal : totalVal;
+
         let accumulator = 0;
 
         const allPotentialColsInOrder = [
@@ -2518,7 +2613,8 @@ export default function FinalizeBoq() {
           rowImages[boqIdx] = parsedImageUrl;
         }
 
-        const isLumpSum = tableData.is_lump_sum === true || productUnits[boqItem.id]?.toLowerCase() === 'ls';
+        const isLumpSum = tableData.is_lump_sum === true || (productUnits[boqItem.id] || "").trim().toLowerCase() === 'ls';
+
         const manualQtyStr = productQuantities[boqItem.id];
         const displayQty = isLumpSum ? 1 : (manualQtyStr !== undefined
           ? (parseFloat(manualQtyStr) || 0)
@@ -2548,19 +2644,21 @@ export default function FinalizeBoq() {
         );
 
         const customVals: string[] = [];
-        
+
         // Calculate effective override rate based on type
         const overrideType = globalOverrideType;
         const overrideInputVal = parseFloat((overrideRates[boqItem.id] ?? globalOverrideValue) || "0") || 0;
         let effectiveOverrideRate = 0;
         if (overrideType === "percentage") {
-          effectiveOverrideRate = totalVal * overrideInputVal / 100 / displayQty;
+          effectiveOverrideRate = rateSqft * (1 + overrideInputVal / 100);
         } else {
-          effectiveOverrideRate = overrideInputVal;
+
+          effectiveOverrideRate = overrideInputVal !== 0 ? overrideInputVal : rateSqft;
         }
-        
+
         const overrideTotalVal = effectiveOverrideRate * displayQty;
-        let runningTotal = effectiveOverrideRate > 0 ? overrideTotalVal : totalVal;
+        let runningTotal = (overrideRates[boqItem.id] || globalOverrideValue) ? overrideTotalVal : totalVal;
+
         let accumulator = 0;
         const rowCalculatedValues: { [colName: string]: number } = {};
 
@@ -3003,21 +3101,21 @@ export default function FinalizeBoq() {
               <div className="flex flex-col space-y-1">
                 <div className="flex items-center justify-between ml-1">
                   <Label className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Select Project</Label>
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     className="h-5 text-[9px] px-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 font-bold uppercase tracking-tight"
                     onClick={() => setShowDisabledVersionsDialog(true)}
                   >
                     <EyeOff className="h-2.5 w-2.5 mr-1" /> Disabled Versions
                   </Button>
                 </div>
-                <Select 
-                  onValueChange={(v) => { 
+                <Select
+                  onValueChange={(v) => {
                     setSelectedProjectId(v || null);
                     setSelectedBomVersionId(null);
                     setSelectedBoqVersionId(null);
-                  }} 
+                  }}
                   value={selectedProjectId || ""}
                 >
                   <SelectTrigger className="w-full bg-slate-50 border-slate-200 h-9 px-3 hover:bg-slate-100/50 transition-colors">
@@ -3617,7 +3715,7 @@ export default function FinalizeBoq() {
                     className="pl-10 h-11 border-slate-200 shadow-sm focus:ring-blue-500 rounded-lg text-sm"
                   />
                   {boqSearchTerm && (
-                    <button 
+                    <button
                       onClick={() => setBoqSearchTerm("")}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
                     >
@@ -3642,7 +3740,7 @@ export default function FinalizeBoq() {
                       </SelectContent>
                     </Select>
                   </div>
-                  
+
                   <div className="text-[11px] font-bold text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200">
                     Showing <span className="text-blue-600">{filteredBoqItems.length}</span> of <span className="text-slate-400">{boqItems.length}</span> Items
                   </div>
@@ -3653,16 +3751,16 @@ export default function FinalizeBoq() {
                 <div className="border-t pt-3 overflow-x-auto">
                   <Tabs value={categoryFilter} onValueChange={setCategoryFilter} className="w-full">
                     <TabsList className="bg-slate-100/50 p-1 flex justify-start h-auto flex-nowrap gap-1">
-                      <TabsTrigger 
-                        value="all" 
+                      <TabsTrigger
+                        value="all"
                         className="text-[10px] font-bold px-4 py-2 uppercase tracking-wider data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all shrink-0"
                       >
                         All ({boqItems.length})
                       </TabsTrigger>
                       {availableCategories.map(cat => (
-                        <TabsTrigger 
+                        <TabsTrigger
                           key={cat}
-                          value={cat} 
+                          value={cat}
                           className="text-[10px] font-bold px-4 py-2 uppercase tracking-wider data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all shrink-0"
                         >
                           {cat} ({boqItems.filter(i => {
@@ -3969,7 +4067,7 @@ export default function FinalizeBoq() {
                       >
                         <ChevronLeft className="h-4 w-4" />
                       </Button>
-                      
+
                       <div className="flex items-center gap-1 mx-2">
                         {Array.from({ length: Math.min(5, totalPages) }).map((_, i) => {
                           let pageNum = 1;
@@ -3977,7 +4075,7 @@ export default function FinalizeBoq() {
                           else if (currentPage <= 3) pageNum = i + 1;
                           else if (currentPage >= totalPages - 2) pageNum = totalPages - 4 + i;
                           else pageNum = currentPage - 2 + i;
-                          
+
                           if (pageNum <= 0 || pageNum > totalPages) return null;
 
                           return (
@@ -4167,10 +4265,10 @@ export default function FinalizeBoq() {
                                     setGlobalOverrideType(newType);
                                     setOverrideTypes(prev => Object.keys(prev).reduce((acc, key) => ({ ...acc, [key]: newType }), {}));
                                   }}
-                                  className="w-10 border border-gray-300 rounded px-0.5 py-0.5 text-[9px] font-bold bg-white text-gray-700 outline-none"
+                                  className="w-20 border border-gray-300 rounded px-1 py-0.5 text-[9px] font-bold bg-white text-gray-700 outline-none shadow-sm"
                                 >
-                                  <option value="value">₹</option>
-                                  <option value="percentage">%</option>
+                                  <option value="percentage">Margin (%)</option>
+                                  <option value="value">Override (₹)</option>
                                 </select>
                               </div>
                               <input
@@ -4226,7 +4324,7 @@ export default function FinalizeBoq() {
                           if (col.hideColumn) return null;
                           return (
                             <DraggableHeaderCol
-                                            key={col.name}
+                              key={col.name}
                               col={col}
                               idx={realIdx}
                               isVersionSubmitted={isVersionSubmitted}
@@ -4317,30 +4415,59 @@ export default function FinalizeBoq() {
 
                         const isSelected = selectedProductIds.has(boqItem.id);
 
-                        let total = 0;
-                        let rateSqft = 0;
+                        // 1. Identify if it's a Lump Sum row (either from DB or manual unit override)
+                        const finalUnit = productUnits[boqItem.id] ?? (
+                          (tableData.materialLines && tableData.targetRequiredQty !== undefined)
+                            ? (tableData.configBasis?.requiredUnitType || tableData.unit || "Sqft")
+                            : (currentStep11Items[0]?.unit || tableData.unit || "nos")
+                        );
+                        const finalIsLumpSum = tableData.is_lump_sum === true || (finalUnit || "").trim().toLowerCase() === 'ls';
+
+
+                        // 2. Resolve Quantity
+                        const manualQtyStr = productQuantities[boqItem.id];
+                        const finalDisplayQty = finalIsLumpSum ? 1 : (manualQtyStr !== undefined
+                          ? (parseFloat(manualQtyStr) || 0)
+                          : (tableData.materialLines && tableData.targetRequiredQty !== undefined
+                            ? tableData.targetRequiredQty
+                            : (currentStep11Items[0]?.qty || 0)));
+
+                        // 3. Resolve Base Rate and System Total
+                        let baseTotal = 0;
+                        let baseRate = 0;
                         if (tableData.targetRequiredQty !== undefined && tableData.targetRequiredQty !== null) {
                           if (tableData.materialLines) {
                             const result = computeBoq(tableData.configBasis, tableData.materialLines, tableData.targetRequiredQty);
                             const manualTotal = currentStep11Items.filter((it: any) => it.manual).reduce((s: number, it: any) =>
                               s + (Number(it.qty) || 0) * (Number(it.supply_rate || 0) + Number(it.install_rate || 0)), 0);
-                            total = result.grandTotal + manualTotal;
+                            baseTotal = result.grandTotal + manualTotal;
                           } else {
-                            total = currentStep11Items.reduce((s: number, it: any) =>
+                            baseTotal = currentStep11Items.reduce((s: number, it: any) =>
                               s + (it.qty || 0) * ((it.supply_rate || 0) + (it.install_rate || 0)), 0);
                           }
-                          rateSqft = tableData.targetRequiredQty > 0 ? total / tableData.targetRequiredQty : total;
+                          baseRate = tableData.targetRequiredQty > 0 ? baseTotal / tableData.targetRequiredQty : baseTotal;
                         } else {
-                          total = currentStep11Items.reduce((s: number, it: any) =>
+                          baseTotal = currentStep11Items.reduce((s: number, it: any) =>
                             s + (it.qty || 0) * ((it.supply_rate || 0) + (it.install_rate || 0)), 0);
-                          rateSqft = (currentStep11Items[0]?.qty ?? 0) > 0 ? total / (currentStep11Items[0]?.qty || 1) : total;
+                          baseRate = (currentStep11Items[0]?.qty ?? 0) > 0 ? baseTotal / (currentStep11Items[0]?.qty || 1) : baseTotal;
                         }
 
-                        // When Convert to LS: use grand total as rate, qty becomes 1
-                        const isLumpSum = tableData.is_lump_sum === true;
-                        if (isLumpSum) {
-                          rateSqft = total;
-                        }
+                        // If LS, the rate is the whole total, and System Total is Rate * 1
+                        const finalRateSqft = finalIsLumpSum ? baseTotal : baseRate;
+                        const finalSystemTotal = finalRateSqft * finalDisplayQty;
+
+                        // 4. Resolve Override Logic
+                        const finalOverrideType = overrideTypes[boqItem.id] ?? globalOverrideType;
+                        const finalOverrideInput = parseFloat((overrideRates[boqItem.id] ?? globalOverrideValue) || "0") || 0;
+
+
+                        const finalEffectiveRate = (finalOverrideType === "percentage")
+                          ? (finalRateSqft * (1 + finalOverrideInput / 100))
+                          : (finalOverrideInput !== 0 ? finalOverrideInput : finalRateSqft);
+
+
+
+                        const finalOverrideTotal = finalEffectiveRate * finalDisplayQty;
 
                         const manualDesc = productDescriptions[boqItem.id] ?? (
                           tableData.subcategory || currentStep11Items[0]?.description || category || ""
@@ -4436,14 +4563,8 @@ export default function FinalizeBoq() {
                               <td className="border-r px-2 py-1 text-center font-medium text-gray-800 align-middle w-24 min-w-[80px]">
                                 <input
                                   type="text"
-                                  value={(() => {
-                                    if (tableData.is_lump_sum) return "LS";
-                                    const defaultUnit = (tableData.materialLines && tableData.targetRequiredQty !== undefined)
-                                      ? (tableData.configBasis?.requiredUnitType || tableData.unit || "Sqft")
-                                      : (currentStep11Items[0]?.unit || tableData.unit || "nos");
-                                    return productUnits[boqItem.id] ?? defaultUnit;
-                                  })()}
-                                  disabled={isVersionSubmitted || tableData.is_lump_sum}
+                                  value={finalIsLumpSum ? "LS" : finalUnit}
+                                  disabled={isVersionSubmitted || finalIsLumpSum}
                                   onChange={e => {
                                     const newUnit = e.target.value;
                                     setProductUnits(prev => ({ ...prev, [boqItem.id]: newUnit }));
@@ -4473,8 +4594,8 @@ export default function FinalizeBoq() {
                               <td className="border-r px-2 py-1 text-center font-semibold text-gray-800 align-middle w-32 min-w-[100px]">
                                 <input
                                   type="number"
-                                  value={tableData.is_lump_sum ? 1 : (productQuantities[boqItem.id] ?? (tableData.targetRequiredQty !== undefined ? tableData.targetRequiredQty : (currentStep11Items[0]?.qty || 0)))}
-                                  disabled={isVersionSubmitted || tableData.is_lump_sum || (productUnits[boqItem.id]?.toLowerCase() === 'ls')}
+                                  value={finalDisplayQty}
+                                  disabled={isVersionSubmitted || finalIsLumpSum}
                                   onChange={e => {
                                     const newQty = e.target.value;
                                     const isLS = productUnits[boqItem.id]?.toLowerCase() === 'ls';
@@ -4482,23 +4603,19 @@ export default function FinalizeBoq() {
                                     setProductQuantities(prev => ({ ...prev, [boqItem.id]: newQty }));
                                   }}
                                   onBlur={async () => { await saveItemLayout(boqItem.id, undefined, undefined, undefined, productQuantities[boqItem.id]); }}
-                                  className={`w-full border-none rounded p-0.5 text-[10px] focus:ring-1 ring-blue-300 outline-none ${(tableData.is_lump_sum || (productUnits[boqItem.id]?.toLowerCase() === 'ls')) ? 'bg-transparent text-gray-500' : 'bg-blue-100/50'} text-center font-semibold h-7 ${getIsModified(boqItem.id, "qty", productQuantities[boqItem.id] ?? (tableData.targetRequiredQty !== undefined ? tableData.targetRequiredQty : (currentStep11Items[0]?.qty || 0))) ? "text-blue-600 border-b border-blue-400" : ""}`}
+                                  className={`w-full border-none rounded p-0.5 text-[10px] focus:ring-1 ring-blue-300 outline-none ${finalIsLumpSum ? 'bg-transparent text-gray-500' : 'bg-blue-100/50'} text-center font-semibold h-7 ${getIsModified(boqItem.id, "qty", finalDisplayQty) ? "text-blue-600 border-b border-blue-400" : ""}`}
                                   placeholder="Qty"
                                 />
                               </td>
                             )}
                             {!hiddenPredefinedCols.rate && (
                               <td className="border-r px-2 py-1.5 text-right font-semibold text-gray-500 text-[10px] align-middle">
-                                ₹{(roundOff ? Math.round(rateSqft) : rateSqft).toLocaleString(undefined, { minimumFractionDigits: roundOff ? 0 : 2, maximumFractionDigits: roundOff ? 0 : 2 })}
+                                ₹{(roundOff ? Math.round(finalRateSqft) : finalRateSqft).toLocaleString(undefined, { minimumFractionDigits: roundOff ? 0 : 2, maximumFractionDigits: roundOff ? 0 : 2 })}
                               </td>
                             )}
                             {!hiddenPredefinedCols.system_total && (
                               <td className="border-r px-2 py-1.5 text-right font-semibold text-gray-800 bg-gray-50 align-middle text-[10px] w-32">
-                                ₹{(() => {
-                                  const displayQty = (tableData.is_lump_sum || productUnits[boqItem.id]?.toLowerCase() === 'ls') ? 1 : (productQuantities[boqItem.id] !== undefined ? parseFloat(productQuantities[boqItem.id]) || 0 : (tableData.targetRequiredQty !== undefined ? Number(tableData.targetRequiredQty) : Number(currentStep11Items[0]?.qty || 0)));
-                                  const rawVal = rateSqft * displayQty;
-                                  return (roundOff ? Math.round(rawVal) : rawVal).toLocaleString(undefined, { minimumFractionDigits: roundOff ? 0 : 2, maximumFractionDigits: roundOff ? 0 : 2 });
-                                })()}
+                                ₹{(roundOff ? Math.round(finalSystemTotal) : finalSystemTotal).toLocaleString(undefined, { minimumFractionDigits: roundOff ? 0 : 2, maximumFractionDigits: roundOff ? 0 : 2 })}
                               </td>
                             )}
                             {!hiddenPredefinedCols.override_rate && (
@@ -4512,22 +4629,16 @@ export default function FinalizeBoq() {
                                       setOverrideRates(prev => ({ ...prev, [boqItem.id]: e.target.value }));
                                       setOverrideTypes(prev => ({ ...prev, [boqItem.id]: globalOverrideType }));
                                     }}
-                                    onBlur={async () => { 
+                                    onBlur={async () => {
                                       setOverrideTypes(prev => ({ ...prev, [boqItem.id]: globalOverrideType }));
-                                      await saveItemLayout(boqItem.id, undefined, undefined, undefined, undefined, overrideRates[boqItem.id] ?? globalOverrideValue, undefined, undefined, globalOverrideType); 
+                                      await saveItemLayout(boqItem.id, undefined, undefined, undefined, undefined, overrideRates[boqItem.id] ?? globalOverrideValue, undefined, undefined, globalOverrideType);
                                     }}
                                     className={`w-full border-none rounded p-0.5 text-[10px] focus:ring-1 ring-gray-300 outline-none bg-gray-50 text-center font-semibold h-6 ${getIsModified(boqItem.id, "rate", overrideRates[boqItem.id] ?? "") ? "text-blue-600 font-bold" : ""}`}
                                     placeholder="0.00"
                                   />
-                                  {globalOverrideType === "percentage" && (
+                                  {finalOverrideInput !== 0 && (
                                     <div className="text-[8px] text-blue-600 font-semibold text-center bg-blue-50 rounded px-1 py-0.5">
-                                      {(() => {
-                                        const pctVal = parseFloat((overrideRates[boqItem.id] ?? globalOverrideValue) || "0") || 0;
-                                        const displayQty = (tableData.is_lump_sum || productUnits[boqItem.id]?.toLowerCase() === 'ls') ? 1 : (productQuantities[boqItem.id] !== undefined ? parseFloat(productQuantities[boqItem.id]) || 0 : (tableData.targetRequiredQty !== undefined ? Number(tableData.targetRequiredQty) : Number(currentStep11Items[0]?.qty || 0)));
-                                        const systemTotal = rateSqft * displayQty;
-                                        const computedRate = systemTotal * pctVal / 100;
-                                        return `≈ ₹${roundOff ? Math.round(computedRate) : computedRate.toFixed(2)}`;
-                                      })()}
+                                      New Rate: ₹{roundOff ? Math.round(finalEffectiveRate) : finalEffectiveRate.toFixed(2)}
                                     </div>
                                   )}
                                 </div>
@@ -4535,47 +4646,14 @@ export default function FinalizeBoq() {
                             )}
                             {!hiddenPredefinedCols.override_total && (
                               <td className="border-r px-2 py-1.5 text-right font-semibold text-gray-800 bg-gray-50 align-middle text-[10px] w-32">
-                                ₹{(() => {
-                                  const overrideType = globalOverrideType;
-                                  const overrideInputVal = parseFloat((overrideRates[boqItem.id] ?? globalOverrideValue) || "0") || 0;
-                                  const isLumpSum = tableData.is_lump_sum || productUnits[boqItem.id]?.toLowerCase() === 'ls';
-                                  const displayQty = isLumpSum ? 1 : (productQuantities[boqItem.id] !== undefined ? parseFloat(productQuantities[boqItem.id]) || 0 : (tableData.targetRequiredQty || currentStep11Items[0]?.qty || 0));
-                                  
-                                  let effectiveOverrideRate = 0;
-                                  if (overrideType === "percentage") {
-                                    // Calculate override rate from percentage
-                                    const systemTotal = rateSqft * displayQty;
-                                    effectiveOverrideRate = systemTotal * overrideInputVal / 100;
-                                  } else {
-                                    // Use override rate directly
-                                    effectiveOverrideRate = overrideInputVal;
-                                  }
-                                  
-                                  const rawVal = effectiveOverrideRate * displayQty;
-                                  return (roundOff ? Math.round(rawVal) : rawVal).toLocaleString(undefined, { minimumFractionDigits: roundOff ? 0 : 2, maximumFractionDigits: roundOff ? 0 : 2 });
-                                })()}
+                                ₹{(roundOff ? Math.round(finalOverrideTotal) : finalOverrideTotal).toLocaleString(undefined, { minimumFractionDigits: roundOff ? 0 : 2, maximumFractionDigits: roundOff ? 0 : 2 })}
                               </td>
                             )}
                             {/* Custom columns */}
                             {(() => {
-                              const isLumpSum = tableData.is_lump_sum === true || productUnits[boqItem.id]?.toLowerCase() === 'ls';
-                              const manualQtyStr = productQuantities[boqItem.id];
-                              const displayQty = isLumpSum ? 1 : (manualQtyStr !== undefined ? (parseFloat(manualQtyStr) || 0) : (tableData.targetRequiredQty || currentStep11Items[0]?.qty || 0));
-                              const baseTotalValue = rateSqft * displayQty;
-
-                              // Calculate effective override rate based on type
-                              const overrideType = globalOverrideType;
-                              const overrideInputVal = parseFloat((overrideRates[boqItem.id] ?? globalOverrideValue) || "0") || 0;
-                              let effectiveOverrideRate = 0;
-                              if (overrideType === "percentage") {
-                                effectiveOverrideRate = baseTotalValue * overrideInputVal / 100 / displayQty;
-                              } else {
-                                effectiveOverrideRate = overrideInputVal;
-                              }
-                              
-                              let itemRunningTotal = effectiveOverrideRate > 0
-                                ? (effectiveOverrideRate * displayQty)
-                                : baseTotalValue;
+                              let itemRunningTotal = (overrideRates[boqItem.id] || globalOverrideValue)
+                                ? finalOverrideTotal
+                                : finalSystemTotal;
                               let accumulator = 0;
                               const rowCalculatedValues: { [colName: string]: number } = {};
 
@@ -4597,16 +4675,17 @@ export default function FinalizeBoq() {
                                   const isCalculated = currentBaseSource && currentBaseSource !== "manual";
 
                                   if (isCalculated) {
-                                    const _ctx: SrcCtx = {
-                                      totalVal: baseTotalValue, rate: rateSqft, qty: displayQty,
-                                      overrideRate: effectiveOverrideRate, overrideTotal: effectiveOverrideRate * displayQty,
+                                    // Use pre-calculated values for custom columns
+                                    const srcCtx: SrcCtx = {
+                                      totalVal: finalSystemTotal, rate: finalRateSqft, qty: finalDisplayQty,
+                                      overrideRate: finalEffectiveRate, overrideTotal: finalOverrideTotal,
                                       rowCalc: rowCalculatedValues, customVals: customColumnValues[boqItem.id]?.[0] || {},
                                     };
-                                    const baseVal = resolveSource(baseSource, _ctx);
+                                    const baseVal = resolveSource(baseSource, srcCtx);
                                     const multiplierSource = (itemCol as any).multiplierSource || "manual";
                                     const manualMultiplier = (itemCol as any).percentageValue || 0;
                                     const operator = (itemCol as any).operator || "%";
-                                    const multiplierVal = multiplierSource === "manual" ? manualMultiplier : resolveSource(multiplierSource, _ctx);
+                                    const multiplierVal = multiplierSource === "manual" ? manualMultiplier : resolveSource(multiplierSource, srcCtx);
                                     valNum = applyOperator(baseVal, multiplierVal, operator);
                                   } else {
                                     valNum = parseFloat(customColumnValues[boqItem.id]?.[0]?.[col.name] || "0") || 0;
@@ -4785,9 +4864,8 @@ export default function FinalizeBoq() {
                                               }
                                             }))}
                                             onBlur={() => saveItemLayout(boqItem.id)}
-                                            className={`w-full h-7 border-transparent rounded px-1 py-0.5 text-[11px] outline-none bg-transparent text-right font-bold transition-colors ${
-                                              historyUsedFields[boqItem.id]?.[col.name] ? 'text-blue-700' : 'text-gray-800'
-                                            }`}
+                                            className={`w-full h-7 border-transparent rounded px-1 py-0.5 text-[11px] outline-none bg-transparent text-right font-bold transition-colors ${historyUsedFields[boqItem.id]?.[col.name] ? 'text-blue-700' : 'text-gray-800'
+                                              }`}
                                             placeholder="0.00"
                                           />
                                         </div>
@@ -4984,83 +5062,83 @@ export default function FinalizeBoq() {
                     </CardContent>
                   </Card>
 
-                {/* Bottom Pagination Navigation */}
-                {totalPages > 1 && (
-                  <div className="mt-4 py-3 px-6 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-8 w-8 p-0"
-                        onClick={() => setCurrentPage(1)}
-                        disabled={currentPage === 1}
-                      >
-                        <ChevronLeft className="h-4 w-4" />
-                        <ChevronLeft className="h-4 w-4 -ml-2" />
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-8 w-8 p-0"
-                        onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                        disabled={currentPage === 1}
-                      >
-                        <ChevronLeft className="h-4 w-4" />
-                      </Button>
-                      
-                      <div className="flex items-center gap-1 mx-2">
-                        {Array.from({ length: Math.min(5, totalPages) }).map((_, i) => {
-                          let pageNum = 1;
-                          if (totalPages <= 5) pageNum = i + 1;
-                          else if (currentPage <= 3) pageNum = i + 1;
-                          else if (currentPage >= totalPages - 2) pageNum = totalPages - 4 + i;
-                          else pageNum = currentPage - 2 + i;
-                          
-                          if (pageNum <= 0 || pageNum > totalPages) return null;
+                  {/* Bottom Pagination Navigation */}
+                  {totalPages > 1 && (
+                    <div className="mt-4 py-3 px-6 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 w-8 p-0"
+                          onClick={() => setCurrentPage(1)}
+                          disabled={currentPage === 1}
+                        >
+                          <ChevronLeft className="h-4 w-4" />
+                          <ChevronLeft className="h-4 w-4 -ml-2" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 w-8 p-0"
+                          onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                          disabled={currentPage === 1}
+                        >
+                          <ChevronLeft className="h-4 w-4" />
+                        </Button>
 
-                          return (
-                            <Button
-                              key={pageNum}
-                              variant={currentPage === pageNum ? "default" : "outline"}
-                              size="sm"
-                              className={cn(
-                                "h-8 min-w-[32px] px-2 text-[11px] font-bold",
-                                currentPage === pageNum ? "bg-blue-600 hover:bg-blue-700" : ""
-                              )}
-                              onClick={() => setCurrentPage(pageNum)}
-                            >
-                              {pageNum}
-                            </Button>
-                          );
-                        })}
+                        <div className="flex items-center gap-1 mx-2">
+                          {Array.from({ length: Math.min(5, totalPages) }).map((_, i) => {
+                            let pageNum = 1;
+                            if (totalPages <= 5) pageNum = i + 1;
+                            else if (currentPage <= 3) pageNum = i + 1;
+                            else if (currentPage >= totalPages - 2) pageNum = totalPages - 4 + i;
+                            else pageNum = currentPage - 2 + i;
+
+                            if (pageNum <= 0 || pageNum > totalPages) return null;
+
+                            return (
+                              <Button
+                                key={pageNum}
+                                variant={currentPage === pageNum ? "default" : "outline"}
+                                size="sm"
+                                className={cn(
+                                  "h-8 min-w-[32px] px-2 text-[11px] font-bold",
+                                  currentPage === pageNum ? "bg-blue-600 hover:bg-blue-700" : ""
+                                )}
+                                onClick={() => setCurrentPage(pageNum)}
+                              >
+                                {pageNum}
+                              </Button>
+                            );
+                          })}
+                        </div>
+
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 w-8 p-0"
+                          onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                          disabled={currentPage === totalPages}
+                        >
+                          <ChevronRight className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 w-8 p-0"
+                          onClick={() => setCurrentPage(totalPages)}
+                          disabled={currentPage === totalPages}
+                        >
+                          <ChevronRight className="h-4 w-4" />
+                          <ChevronRight className="h-4 w-4 -ml-2" />
+                        </Button>
                       </div>
 
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-8 w-8 p-0"
-                        onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                        disabled={currentPage === totalPages}
-                      >
-                        <ChevronRight className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-8 w-8 p-0"
-                        onClick={() => setCurrentPage(totalPages)}
-                        disabled={currentPage === totalPages}
-                      >
-                        <ChevronRight className="h-4 w-4" />
-                        <ChevronRight className="h-4 w-4 -ml-2" />
-                      </Button>
+                      <div className="text-[11px] font-bold text-slate-500 uppercase tracking-tight">
+                        Page <span className="text-blue-600 font-black">{currentPage}</span> of {totalPages}
+                      </div>
                     </div>
-
-                    <div className="text-[11px] font-bold text-slate-500 uppercase tracking-tight">
-                      Page <span className="text-blue-600 font-black">{currentPage}</span> of {totalPages}
-                    </div>
-                  </div>
-                )}
+                  )}
 
                 </div>
 
@@ -5129,7 +5207,7 @@ export default function FinalizeBoq() {
                   >
                     Save Draft
                   </Button>
-                  
+
                   {isFinanceTeam && (
                     <Button
                       onClick={handleFinanceSubmitForApproval}
