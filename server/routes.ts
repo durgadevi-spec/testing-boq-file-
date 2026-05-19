@@ -5474,6 +5474,188 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/projects/compare - Compare multiple projects side-by-side
+  app.get("/api/projects/compare", authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const { ids } = req.query;
+      if (!ids || typeof ids !== "string") {
+        return res.status(400).json({ message: "Comma-separated project 'ids' query parameter is required" });
+      }
+
+      const projectIds = ids.split(",").map(id => id.trim()).filter(Boolean);
+      if (projectIds.length === 0) {
+        return res.status(400).json({ message: "No valid project IDs provided" });
+      }
+
+      const comparisonResults = [];
+
+      for (const projectId of projectIds) {
+        // 1. Get Project
+        const projectRes = await query("SELECT * FROM boq_projects WHERE id = $1", [projectId]);
+        if (projectRes.rows.length === 0) continue;
+        const project = projectRes.rows[0];
+
+        // 2. Get Final Version (or fallback to latest version)
+        const finalVerRes = await query(
+          `SELECT * FROM boq_versions WHERE project_id = $1 AND is_last_final = TRUE 
+           ORDER BY CASE WHEN type = 'boq' THEN 1 ELSE 2 END ASC LIMIT 1`,
+          [projectId]
+        );
+        let selectedVersion = finalVerRes.rows[0];
+        if (!selectedVersion) {
+          const latestVerRes = await query(
+            `SELECT * FROM boq_versions WHERE project_id = $1 ORDER BY version_number DESC LIMIT 1`,
+            [projectId]
+          );
+          selectedVersion = latestVerRes.rows[0];
+        }
+
+        // 3. Get Version List & Counts
+        const allVersionsRes = await query(
+          "SELECT id, version_number, type, status, is_last_final, created_at, updated_at FROM boq_versions WHERE project_id = $1 ORDER BY version_number DESC",
+          [projectId]
+        );
+        const versions = allVersionsRes.rows;
+        const versionCount = versions.length;
+
+        // 4. Summarize Items and financials
+        let categoryBreakdown: any[] = [];
+        let split = { material: 0, labour: 0, supply: 0, install: 0 };
+        let itemCount = 0;
+        let items: any[] = [];
+        let baseTotal = 0;
+        let grandTotal = 0;
+        let margin = 0;
+        let profit = 0;
+        let tax = 0;
+        let discount = 0;
+        let financePercent = 0;
+
+        if (selectedVersion) {
+          const itemsRes = await query(
+            "SELECT id, estimator, table_data FROM boq_items WHERE version_id = $1",
+            [selectedVersion.id]
+          );
+          const rawItems = itemsRes.rows;
+          itemCount = rawItems.length;
+
+          const categories: Record<string, { budget: number, revenue: number }> = {};
+
+          rawItems.forEach(item => {
+            let td = item.table_data;
+            if (typeof td === 'string') {
+              try { td = JSON.parse(td); } catch (e) { return; }
+            }
+            if (!td) return;
+
+            const catName = td.category || 'Uncategorized';
+            if (!categories[catName]) categories[catName] = { budget: 0, revenue: 0 };
+
+            const itemBudget = Number(td.total_budget || td.internal_cost || 0);
+            const itemRevenue = Number(td.total_revenue || td.project_value || 0);
+
+            categories[catName].budget += itemBudget;
+            categories[catName].revenue += itemRevenue;
+
+            baseTotal += itemBudget;
+            grandTotal += itemRevenue;
+
+            // Extract item rates and details for side-by-side product comparison
+            const currentStep11 = Array.isArray(td.step11_items) ? td.step11_items : [];
+            const derivedName = td.product_name || item.estimator || "—";
+            const productName = (derivedName === "Manual Product" || derivedName === "Manual" || item.estimator === "manual_product" || item.estimator === "Manual")
+              ? (currentStep11[0]?.title || currentStep11[0]?.description || derivedName)
+              : derivedName;
+
+            const isLumpSum = td.is_lump_sum === true || (String(td.finalize_unit || "").toLowerCase() === 'ls');
+            const displayQty = td.finalize_qty !== undefined && td.finalize_qty !== null
+              ? parseFloat(String(td.finalize_qty)) || 0
+              : (currentStep11[0]?.qty || 0);
+
+            const effectiveQty = isLumpSum ? 1 : displayQty;
+            const rate = effectiveQty > 0 ? itemRevenue / effectiveQty : itemRevenue;
+
+            items.push({
+              productName,
+              category: td.category || "General",
+              unit: td.finalize_unit || "nos",
+              qty: effectiveQty,
+              rate: rate,
+              total: itemRevenue,
+              budget: itemBudget
+            });
+
+            // Calculate splits (Material vs Labour)
+            const lines = Array.isArray(td.materialLines) ? td.materialLines : currentStep11;
+            const scalingFactor = Number(td.targetRequiredQty || 1);
+
+            lines.forEach((l: any) => {
+              const rawQty = Number(l.roundOff || l.qty || l.requiredQty || l.quantity || 0);
+              const qty = td.materialLines ? (rawQty * scalingFactor) : rawQty;
+              const sRate = Number(l.supplyRate || l.supply_rate || l.rate || 0);
+              const iRate = Number(l.installRate || l.install_rate || l.labour_rate || 0);
+
+              split.material += qty * sRate;
+              split.labour += qty * iRate;
+              split.supply += qty * sRate;
+              split.install += qty * iRate;
+            });
+
+            if (lines.length === 0 && itemBudget > 0) {
+              split.material += itemBudget;
+            }
+
+            // Extract override details, tax, discount from table_data if they exist
+            if (td.finalize_tax) tax += Number(td.finalize_tax);
+            if (td.finalize_discount) discount += Number(td.finalize_discount);
+            if (td.finalize_finance_percent) financePercent = Number(td.finalize_finance_percent);
+          });
+
+          profit = grandTotal - baseTotal;
+          margin = grandTotal !== 0 ? (profit / grandTotal) * 100 : 0;
+
+          categoryBreakdown = Object.entries(categories).map(([name, vals]) => {
+            const p = vals.revenue - vals.budget;
+            const m = vals.revenue !== 0 ? (p / vals.revenue) * 100 : 0;
+            return {
+              name,
+              budget: vals.budget,
+              revenue: vals.revenue,
+              profit: p,
+              margin: m
+            };
+          }).sort((a, b) => b.revenue - a.revenue);
+        }
+
+        comparisonResults.push({
+          project,
+          versionCount,
+          selectedVersion,
+          versions,
+          financials: {
+            baseTotal,
+            grandTotal,
+            profit,
+            margin,
+            materialCost: split.material,
+            labourCost: split.labour,
+            itemCount,
+            tax,
+            discount,
+            financePercent
+          },
+          categoryBreakdown,
+          items
+        });
+      }
+
+      res.json({ projects: comparisonResults });
+    } catch (err) {
+      console.error("GET /api/projects/compare error:", err);
+      res.status(500).json({ message: "Failed to load project comparison data" });
+    }
+  });
+
   app.get("/api/projects/:id/final-profitability", authMiddleware, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;

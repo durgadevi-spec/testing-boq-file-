@@ -2853,7 +2853,7 @@ export default function FinalizeBoq() {
   };
 
   const handleDownloadExcel = () => {
-    if (!selectedProjectId || boqItems.length === 0) {
+    if (!selectedProjectId || filteredBoqItems.length === 0) {
       toast({ title: "Info", description: `No ${activeVersion?.type === 'boq' ? 'BOQ' : 'BOM'} items to download`, variant: "default" });
       return;
     }
@@ -2919,7 +2919,7 @@ export default function FinalizeBoq() {
       const headers = selectedExportCols.map(colName => colName);
       sheetData.push(headers);
 
-      boqItems.forEach((boqItem, boqIdx) => {
+      filteredBoqItems.forEach((boqItem, boqIdx) => {
         let tableData = boqItem.table_data || {};
         if (typeof tableData === "string") try { tableData = JSON.parse(tableData); } catch { tableData = {}; }
 
@@ -3190,7 +3190,7 @@ export default function FinalizeBoq() {
   };
 
   const handleDownloadPdf = async () => {
-    if (!selectedProjectId || boqItems.length === 0) {
+    if (!selectedProjectId || filteredBoqItems.length === 0) {
       toast({ title: "Info", description: `No ${activeVersion?.type === 'boq' ? 'BOQ' : 'BOM'} items to download`, variant: "default" });
       return;
     }
@@ -3218,7 +3218,7 @@ export default function FinalizeBoq() {
       const rowImages: { [rowIndex: number]: string } = {};
       const productColIndex = selectedPdfExportCols.indexOf("Product / Material");
 
-      boqItems.forEach((boqItem, boqIdx) => {
+      filteredBoqItems.forEach((boqItem, boqIdx) => {
         let tableData = boqItem.table_data || {};
         if (typeof tableData === "string") try { tableData = JSON.parse(tableData); } catch { tableData = {}; }
 

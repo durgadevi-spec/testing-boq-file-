@@ -54,6 +54,7 @@ import {
   History,
   ShieldCheck,
   Zap,
+  Scale,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
@@ -61,6 +62,7 @@ import { cn, fuzzySearch } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import ProjectCompareView from "@/components/ProjectCompareView";
 
 interface Project {
   id: string;
@@ -472,7 +474,7 @@ export default function ProjectDashboard() {
               </div>
 
               {/* Tabs Toggle */}
-              <Tabs value={activeTab} onValueChange={(v) => { setActiveTab(v); if (v === 'overview') setSelectedReportProjectId(null); }} className="w-[400px]">
+              <Tabs value={activeTab} onValueChange={(v) => { setActiveTab(v); if (v === 'overview') setSelectedReportProjectId(null); }} className="w-auto">
                 <TabsList className="bg-slate-100 p-1 rounded-xl">
                   <TabsTrigger value="overview" className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm gap-2 h-8 px-4 text-xs font-bold">
                     <LayoutDashboard size={14} />
@@ -481,6 +483,10 @@ export default function ProjectDashboard() {
                   <TabsTrigger value="reports" className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm gap-2 h-8 px-4 text-xs font-bold">
                     <ClipboardList size={14} />
                     Management Reports
+                  </TabsTrigger>
+                  <TabsTrigger value="compare" className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm gap-2 h-8 px-4 text-xs font-bold">
+                    <Scale size={14} />
+                    Project Compare
                   </TabsTrigger>
                 </TabsList>
               </Tabs>
@@ -1120,6 +1126,10 @@ export default function ProjectDashboard() {
                     </div>
                 </div>
                )}
+            </TabsContent>
+
+            <TabsContent value="compare" className="m-0 space-y-8 pb-20">
+              <ProjectCompareView projects={projects} />
             </TabsContent>
           </Tabs>
         </div>
