@@ -58,6 +58,8 @@ interface AuditLog {
 }
 
 import { Layout } from "@/components/layout/Layout";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { UsageAnalytics } from "./UsageAnalytics";
 
 export default function SpyDashboard() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
@@ -205,10 +207,10 @@ export default function SpyDashboard() {
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h2 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-              <Eye className="h-8 w-8 text-blue-500" /> Activity Log (Spy)
+              <Eye className="h-8 w-8 text-blue-500" /> Spy Dashboard
             </h2>
             <p className="text-muted-foreground font-medium">
-              Project activity monitoring and user action history
+              Project activity monitoring, user action history, and usage analytics
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -227,7 +229,14 @@ export default function SpyDashboard() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Tabs defaultValue="activity" className="space-y-6">
+          <TabsList className="bg-slate-100/50 p-1">
+            <TabsTrigger value="activity" className="text-sm font-semibold">Activity Feed</TabsTrigger>
+            <TabsTrigger value="analytics" className="text-sm font-semibold">Usage Analytics</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="activity" className="m-0">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Card className="md:col-span-1 shadow-sm border-slate-200 h-fit">
             <CardHeader className="pb-3 pt-4 px-4">
               <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -382,6 +391,12 @@ export default function SpyDashboard() {
             </CardContent>
           </Card>
         </div>
+          </TabsContent>
+
+          <TabsContent value="analytics" className="m-0">
+            <UsageAnalytics />
+          </TabsContent>
+        </Tabs>
       </div>
     </Layout>
   );

@@ -123,6 +123,131 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/audit/usage-analytics - Fetch usage analytics
+  app.get("/api/audit/usage-analytics", authMiddleware, requireRole("admin", "software_team"), async (req: Request, res: Response) => {
+    try {
+      const { fromDate, toDate } = req.query;
+      
+      let dateFilter = "";
+      const params: any[] = [];
+      
+      if (fromDate) {
+        params.push(fromDate);
+        dateFilter += ` AND requested_at >= $${params.length}::timestamp`;
+      }
+      
+      if (toDate) {
+        params.push(toDate);
+        // Add 1 day to toDate to include the entire day if it's just a date string
+        dateFilter += ` AND requested_at < ($${params.length}::date + interval '1 day')`;
+      }
+
+      const userStatsSql = `
+        WITH daily_stats AS (
+          SELECT 
+            username,
+            user_role as role,
+            DATE(requested_at) as log_date,
+            MIN(requested_at) as first_active,
+            MAX(requested_at) as last_active,
+            COUNT(CASE WHEN module = 'AUTH' AND action = 'CREATE' AND details ILIKE '%login%' THEN 1 END) as login_count,
+            COUNT(*) as total_actions,
+            -- Estimate egress based on actions, assuming ~5KB per action on average
+            COUNT(*) * 5.0 / 1024.0 as est_egress_mb
+          FROM audit_logs
+          WHERE username IS NOT NULL ${dateFilter}
+          GROUP BY username, user_role, DATE(requested_at)
+        )
+        SELECT 
+          username,
+          MAX(role) as role,
+          SUM(EXTRACT(EPOCH FROM (last_active - first_active))/3600.0) as total_active_hours,
+          SUM(login_count) as total_logins,
+          MAX(last_active) as last_active_time,
+          AVG(EXTRACT(EPOCH FROM (last_active - first_active))/3600.0) as avg_daily_hours,
+          SUM(est_egress_mb) as total_egress_mb,
+          SUM(total_actions) as total_actions
+        FROM daily_stats
+        GROUP BY username
+        ORDER BY total_active_hours DESC
+      `;
+      
+      const result = await query(userStatsSql, params);
+      
+      // Calculate overall system stats
+      const totalEgress = result.rows.reduce((sum, row) => sum + Number(row.total_egress_mb || 0), 0);
+      const totalActions = result.rows.reduce((sum, row) => sum + Number(row.total_actions || 0), 0);
+      
+      res.json({
+        userStats: result.rows,
+        systemStats: {
+          totalEgressMb: totalEgress,
+          totalActions,
+        }
+      });
+      
+    } catch (err) {
+      console.error("/api/audit/usage-analytics GET error", err);
+      res.status(500).json({ message: "Failed to fetch usage analytics" });
+    }
+  });
+
+  // GET /api/audit/usage-analytics/:username - Fetch detailed usage analytics for a specific user
+  app.get("/api/audit/usage-analytics/:username", authMiddleware, requireRole("admin", "software_team"), async (req: Request, res: Response) => {
+    try {
+      const { username } = req.params;
+      const { fromDate, toDate } = req.query;
+
+      let dateFilter = "AND username = $1";
+      const params: any[] = [username];
+
+      if (fromDate) {
+        params.push(fromDate);
+        dateFilter += ` AND requested_at >= $${params.length}::timestamp`;
+      }
+
+      if (toDate) {
+        params.push(toDate);
+        dateFilter += ` AND requested_at < ($${params.length}::date + interval '1 day')`;
+      }
+
+      const moduleStatsSql = `
+        WITH user_logs AS (
+          SELECT 
+            module,
+            requested_at,
+            LAG(requested_at) OVER (ORDER BY requested_at) as prev_time
+          FROM audit_logs
+          WHERE 1=1 ${dateFilter}
+        ),
+        time_diffs AS (
+          SELECT
+            module,
+            CASE 
+              WHEN prev_time IS NULL THEN 5 -- Base 5 minutes for first action
+              WHEN EXTRACT(EPOCH FROM (requested_at - prev_time)) > 1800 THEN 5 -- If idle > 30m, count as 5m
+              ELSE EXTRACT(EPOCH FROM (requested_at - prev_time)) / 60.0
+            END as minutes_spent
+          FROM user_logs
+        )
+        SELECT 
+          module,
+          COALESCE(SUM(minutes_spent), 0) as total_minutes,
+          COUNT(*) as action_count
+        FROM time_diffs
+        GROUP BY module
+        ORDER BY total_minutes DESC
+      `;
+
+      const result = await query(moduleStatsSql, params);
+
+      res.json({ moduleStats: result.rows });
+    } catch (err) {
+      console.error("/api/audit/usage-analytics/:username GET error", err);
+      res.status(500).json({ message: "Failed to fetch detailed user analytics" });
+    }
+  });
+
   // POST /api/audit/navigate - Record page navigation from the frontend NavigationLogger
   app.post("/api/audit/navigate", authMiddleware, async (req: Request, res: Response) => {
     try {

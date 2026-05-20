@@ -34,9 +34,9 @@ export async function logActivity(params: {
     );
   } catch (err: any) {
     if (err.code === '42P01') {
-        console.warn("[AUDIT] audit_logs table does not exist. Skipping log.");
+      console.warn("[AUDIT] audit_logs table does not exist. Skipping log.");
     } else {
-        console.error("[AUDIT] Failed to log activity:", err.message);
+      console.error("[AUDIT] Failed to log activity:", err.message);
     }
   }
 }
@@ -48,13 +48,13 @@ export async function logActivity(params: {
 export const auditMiddleware = async (req: Request, res: Response, next: NextFunction) => {
   const method = req.method;
   const path = req.path;
-  
+
   if (method === "GET") {
     return next();
   }
 
   const user = (req as any).user;
-  
+
   res.on("finish", async () => {
     if (res.statusCode >= 200 && res.statusCode < 300) {
       let action = "ACTION";
@@ -87,20 +87,20 @@ export const auditMiddleware = async (req: Request, res: Response, next: NextFun
  * Helper to fetch "Before" data for specific modules
  */
 export async function getBeforeData(module: string, id: string): Promise<any | null> {
-    try {
-        let tableName = "";
-        if (module === "materials") tableName = "materials";
-        else if (module === "shops") tableName = "shops";
-        else if (module === "boq_projects") tableName = "boq_projects";
-        else if (module === "products") tableName = "products";
-        else if (module === "boq_versions") tableName = "boq_versions";
-        
-        if (!tableName) return null;
-        
-        const result = await query(`SELECT * FROM ${tableName} WHERE id = $1`, [id]);
-        return result.rows[0] || null;
-    } catch (e) {
-        console.error(`[AUDIT] Failed to fetch before data for ${module}/${id}:`, e);
-        return null;
-    }
+  try {
+    let tableName = "";
+    if (module === "materials") tableName = "materials";
+    else if (module === "shops") tableName = "shops";
+    else if (module === "boq_projects") tableName = "boq_projects";
+    else if (module === "products") tableName = "products";
+    else if (module === "boq_versions") tableName = "boq_versions";
+
+    if (!tableName) return null;
+
+    const result = await query(`SELECT * FROM ${tableName} WHERE id = $1`, [id]);
+    return result.rows[0] || null;
+  } catch (e) {
+    console.error(`[AUDIT] Failed to fetch before data for ${module}/${id}:`, e);
+    return null;
+  }
 }
