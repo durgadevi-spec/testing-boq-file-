@@ -39,6 +39,13 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    target: "esnext", // Fixes parsing errors with React 19 JSX runtime in ESBuild
+    rollupOptions: {
+      onLog(level, log, handler) {
+        if (log.cause && (log.cause as any).message === `Parse error`) return;
+        handler(level, log);
+      }
+    }
   },
   server: {
     host: "localhost",
