@@ -3022,62 +3022,100 @@ export default function CreateBom() {
 
   // ── Budget Helpers ──────────────────────────────────────────────────────────
 
-  const calculateCurrentProjectValue = () => {
-    return boqItems.reduce((acc, bi) => {
-      const td = parseTableData(bi.table_data);
-      const isEngine = !!(td.materialLines && td.targetRequiredQty !== undefined);
-      const target = td.targetRequiredQty || 1;
-      let cardTotal = 0;
+  const getSingleBoqItemTotal = (bi: BOMItem) => {
+    const td = parseTableData(bi.table_data);
+    const isEngine = !!(td.materialLines && td.targetRequiredQty !== undefined);
+    const target = td.targetRequiredQty || 1;
+    const step11Items = Array.isArray(td.step11_items) ? td.step11_items : [];
 
-      if (isEngine) {
-        // Match BoqItemCard engine logic
-        try {
-          const res = computeBoq(
-            td.configBasis || { requiredUnitType: "Sqft", baseRequiredQty: 1, wastagePctDefault: 0 },
-            td.materialLines || [],
-            target
-          );
-          if (Array.isArray(res.computed)) {
-            res.computed.forEach((line, idx) => {
-              const itemKey = `${bi.id}-engine-${idx}`;
-              const qty = Number(getEditedValue(itemKey, "qty", line.perUnitQty));
-              const sRate = Number(getEditedValue(itemKey, "supply_rate", line.supplyRate));
-              const iRate = Number(getEditedValue(itemKey, "install_rate", line.installRate));
-              const rate = Number(getEditedValue(itemKey, "rate", sRate + iRate)) || (sRate + iRate);
-              const reqQty = Number((qty * target).toFixed(2));
-              const roundOff = line.applyRounding !== false ? Math.ceil(reqQty) : reqQty;
-              cardTotal += Number((roundOff * rate).toFixed(2));
-            });
-          }
-        } catch { }
+    let totalAmount = 0;
 
-        // Manual items within engine
-        const step11 = Array.isArray(td.step11_items) ? td.step11_items : [];
-        step11.filter((it: any) => it?.manual).forEach((it: any, s11Idx: number) => {
-          const itemKey = `${bi.id}-manual-${s11Idx}`;
-          const qty = Number(getEditedValue(itemKey, "qty", it.qty ?? 0)) || 0;
-          const sRate = Number(getEditedValue(itemKey, "supply_rate", it.supply_rate ?? 0)) || 0;
-          const iRate = Number(getEditedValue(itemKey, "install_rate", it.install_rate ?? 0)) || 0;
-          const rate = Number(getEditedValue(itemKey, "rate", sRate + iRate)) || (sRate + iRate);
-          cardTotal += Number((qty * rate).toFixed(2));
-        });
+    if (isEngine) {
+      // 1. Calculate engine lines total
+      try {
+        const res = computeBoq(
+          td.configBasis || { requiredUnitType: "Sqft", baseRequiredQty: 1, wastagePctDefault: 0 },
+          td.materialLines || [],
+          target
+        );
+        if (Array.isArray(res.computed)) {
+          res.computed.forEach((line: any, idx: number) => {
+            const itemKey = `${bi.id}-engine-${idx}`;
+            const isFrozen = line.freezeAndEdit || line.freeze_and_edit;
+            const qty = Number(getEditedValue(itemKey, "qty", line.perUnitQty));
+            const sRate = Number(getEditedValue(itemKey, "supply_rate", line.supplyRate));
+            const iRate = Number(getEditedValue(itemKey, "install_rate", line.installRate));
+            const rate = Number(getEditedValue(itemKey, "rate", sRate + iRate)) || (sRate + iRate);
+
+            const isLumpSumLine = (line.unit || "").toLowerCase() === "ls";
+            const reqQty = isFrozen ? line.roundOffQty : (isLumpSumLine ? 1 : Number((qty * target).toFixed(2)));
+            const roundOff = isFrozen ? line.roundOffQty : (isLumpSumLine ? 1 : (line.applyRounding !== false ? Math.ceil(reqQty) : reqQty));
+
+            totalAmount += Number((roundOff * rate).toFixed(2));
+          });
+        }
+      } catch { }
+
+      // 2. Add manual step11 items
+      step11Items.forEach((it: any, s11Idx: number) => {
+        if (!it?.manual) return;
+        if (td.materialLines?.some((ml: any) => (ml.id || ml.materialId) === it.id)) return;
+
+        const itemKey = `${bi.id}-manual-${s11Idx}`;
+        const qty = Number(getEditedValue(itemKey, "qty", it.qtyPerSqf ?? it.qty ?? 0)) || 0;
+        const sRate = Number(getEditedValue(itemKey, "supply_rate", it.supply_rate ?? 0)) || 0;
+        const iRate = Number(getEditedValue(itemKey, "install_rate", it.install_rate ?? 0)) || 0;
+        const rate = Number(getEditedValue(itemKey, "rate", sRate + iRate)) || (sRate + iRate);
+        const u = getEditedValue(itemKey, "unit", it.unit || "nos");
+        const isLumpSum = u.toLowerCase() === "ls";
+        const displayQty = isLumpSum ? 1 : qty;
+
+        totalAmount += Number((displayQty * rate).toFixed(2));
+      });
+    } else {
+      // Non-engine product
+      step11Items.forEach((it: any, s11Idx: number) => {
+        const itemKey = it.itemKey || `${bi.id}-${s11Idx}`;
+        const baseQty = Number(getEditedValue(itemKey, "qty", it.qtyPerSqf ?? it.qty ?? 0)) || 0;
+        const u = getEditedValue(itemKey, "unit", it.unit || "nos");
+        const isLumpSum = u.toLowerCase() === "ls";
+        const isManual = it.manual || !td.materialLines;
+        const scaledQty = isManual ? (isLumpSum ? 1 : baseQty) : (isLumpSum ? 1 : Number((baseQty * target).toFixed(2)));
+        const roundOff = (it.applyRounding !== false && !isManual && !isLumpSum) ? Math.ceil(scaledQty) : scaledQty;
+        const sRate = Number(getEditedValue(itemKey, "supply_rate", it.supply_rate ?? 0)) || 0;
+        const iRate = Number(getEditedValue(itemKey, "install_rate", it.install_rate ?? 0)) || 0;
+        const rate = Number(getEditedValue(itemKey, "rate", sRate + iRate)) || (sRate + iRate);
+
+        totalAmount += Number((roundOff * rate).toFixed(2));
+      });
+    }
+
+    // 3. Apply use_standard_rate (Fixed Rate) if checked
+    const useStandardRate = !!td.use_standard_rate;
+    if (useStandardRate && isEngine) {
+      const baseQty = Number(td.configBasis?.baseRequiredQty || 1);
+      let standardRate = 0;
+      const savedTotalCost = Number(td.total_cost ?? td.configBasis?.total_cost ?? 0);
+      if (savedTotalCost > 0) {
+        standardRate = savedTotalCost / baseQty;
       } else {
-        // Match BoqItemCard non-engine logic
-        const step11 = Array.isArray(td.step11_items) ? td.step11_items : [];
-        step11.forEach((it: any, s11Idx: number) => {
-          const itemKey = it.itemKey || `${bi.id}-${s11Idx}`;
-          const baseQty = Number(getEditedValue(itemKey, "qty", it.qty ?? 0)) || 0;
-          const sRate = Number(getEditedValue(itemKey, "supply_rate", it.supply_rate ?? 0)) || 0;
-          const iRate = Number(getEditedValue(itemKey, "install_rate", it.install_rate ?? 0)) || 0;
-          const rate = Number(getEditedValue(itemKey, "rate", sRate + iRate)) || (sRate + iRate);
-          const u = getEditedValue(itemKey, "unit", it.unit || "nos");
-          const isLumpSum = u.toLowerCase() === "ls";
-          const scaledQty = isLumpSum ? baseQty : Number((baseQty * target).toFixed(2));
-          cardTotal += Number((scaledQty * rate).toFixed(2));
-        });
+        try {
+          const resBase = computeBoq(
+            { ...(td.configBasis || { requiredUnitType: "Sqft", baseRequiredQty: 1, wastagePctDefault: 0 }), wastagePctDefault: 0 },
+            (td.materialLines || []).map((l: any) => ({ ...l, applyWastage: false })),
+            baseQty
+          );
+          standardRate = resBase.grandTotal / baseQty;
+        } catch { }
       }
-      return acc + cardTotal;
-    }, 0);
+      return standardRate * target;
+    }
+
+    return totalAmount;
+  };
+
+  const calculateCurrentProjectValue = () => {
+    return boqItems.reduce((acc, bi) => acc + getSingleBoqItemTotal(bi), 0);
   };
 
 
@@ -3925,16 +3963,44 @@ export default function CreateBom() {
           productTotal += (l.amount || 0);
         });
 
-        // Calculate logical rounding
+        // Calculate logical rounding or standard rate rounding
+        const useStandardRate = !!tableData.use_standard_rate;
         const targetQty = tableData.targetRequiredQty || 1;
-        const productGrandTotal = productTotal;
-        const productRate = targetQty > 0 ? productGrandTotal / targetQty : 0;
-        const displayRate = Number(productRate.toFixed(2));
-        const logicalTotal = targetQty * displayRate;
-        const roundOff = logicalTotal - productGrandTotal;
+        
+        let productGrandTotal = productTotal;
+        let roundOff = 0;
+        let adjustmentLabel = "Round Off (Adjustment)";
+
+        if (useStandardRate && isEngineBased) {
+          // Standard Rate / Fixed Rate logic
+          const baseQty = Number(tableData.configBasis?.baseRequiredQty || 1);
+          let standardRate = 0;
+          const savedTotalCost = Number(tableData.total_cost ?? tableData.configBasis?.total_cost ?? 0);
+          if (savedTotalCost > 0) {
+            standardRate = savedTotalCost / baseQty;
+          } else {
+            try {
+              const resBase = computeBoq(
+                { ...(tableData.configBasis || { requiredUnitType: "Sqft", baseRequiredQty: 1, wastagePctDefault: 0 }), wastagePctDefault: 0 },
+                (tableData.materialLines || []).map((l: any) => ({ ...l, applyWastage: false })),
+                baseQty
+              );
+              standardRate = resBase.grandTotal / baseQty;
+            } catch { }
+          }
+          productGrandTotal = standardRate * targetQty;
+          roundOff = productGrandTotal - productTotal;
+          adjustmentLabel = "Rounding Adjustment";
+        } else {
+          // Normal logic (logical rounding)
+          const productRate = targetQty > 0 ? productTotal / targetQty : 0;
+          const displayRate = Number(productRate.toFixed(2));
+          const logicalTotal = targetQty * displayRate;
+          roundOff = logicalTotal - productTotal;
+        }
 
         if (Math.abs(roundOff) >= 0.01) {
-          exportData.push(["", "Round Off (Adjustment)", "", "", "", "", "", "", "", "", roundOff]);
+          exportData.push(["", adjustmentLabel, "", "", "", "", "", "", "", "", roundOff]);
         }
 
         // Product total row
@@ -4149,18 +4215,47 @@ export default function CreateBom() {
           productTotal += (l.amount || 0);
         });
 
-        // Calculate logical rounding
+        // Calculate logical rounding or standard rate rounding
+        const useStandardRate = !!td.use_standard_rate;
         const targetQty = td.targetRequiredQty || 1;
-        const productGrandTotal = productTotal;
-        const productRate = targetQty > 0 ? productGrandTotal / targetQty : 0;
-        const displayRate = Number(productRate.toFixed(2));
-        const logicalTotal = targetQty * displayRate;
-        const roundOff = logicalTotal - productGrandTotal;
+        const isEngineBased = !!(td.materialLines && td.targetRequiredQty !== undefined);
+
+        let productGrandTotal = productTotal;
+        let roundOff = 0;
+        let adjustmentLabel = "Round Off";
+
+        if (useStandardRate && isEngineBased) {
+          // Standard Rate / Fixed Rate logic
+          const baseQty = Number(td.configBasis?.baseRequiredQty || 1);
+          let standardRate = 0;
+          const savedTotalCost = Number(td.total_cost ?? td.configBasis?.total_cost ?? 0);
+          if (savedTotalCost > 0) {
+            standardRate = savedTotalCost / baseQty;
+          } else {
+            try {
+              const resBase = computeBoq(
+                { ...(td.configBasis || { requiredUnitType: "Sqft", baseRequiredQty: 1, wastagePctDefault: 0 }), wastagePctDefault: 0 },
+                (td.materialLines || []).map((l: any) => ({ ...l, applyWastage: false })),
+                baseQty
+              );
+              standardRate = resBase.grandTotal / baseQty;
+            } catch { }
+          }
+          productGrandTotal = standardRate * targetQty;
+          roundOff = productGrandTotal - productTotal;
+          adjustmentLabel = "Rounding Adjustment";
+        } else {
+          // Normal logic (logical rounding)
+          const productRate = targetQty > 0 ? productTotal / targetQty : 0;
+          const displayRate = Number(productRate.toFixed(2));
+          const logicalTotal = targetQty * displayRate;
+          roundOff = logicalTotal - productTotal;
+        }
 
         if (Math.abs(roundOff) >= 0.01) {
           tableBody.push([
             { content: "", colSpan: 10 },
-            { content: "Round Off", styles: { fontStyle: 'italic', textColor: [100, 100, 100], fillColor: [252, 252, 252] } },
+            { content: adjustmentLabel, styles: { fontStyle: 'italic', textColor: [100, 100, 100], fillColor: [252, 252, 252] } },
             { content: (roundOff > 0 ? "+" : "") + roundOff.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), styles: { fontStyle: 'italic', textColor: [100, 100, 100], fillColor: [252, 252, 252], halign: 'right' } }
           ]);
         }
