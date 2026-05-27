@@ -3057,7 +3057,8 @@ export default function FinalizeBoq() {
               const itemColList = customColumns[boqItem.id] || [];
               const itemCol = itemColList.find((c: any) => c.name === colName) || currentCol;
               const baseSource = (itemCol as any).baseSource;
-              const isCalculated = baseSource && baseSource !== "manual";
+              const currentBaseSource = baseSource || "Total Value (₹)";
+              const isCalculated = currentBaseSource && currentBaseSource !== "manual";
               let valNum = 0;
 
               if (isCalculated) {
@@ -3069,10 +3070,10 @@ export default function FinalizeBoq() {
                 const effectiveOverrideRate = itemOverrideType === "percentage" ? (rateSqft * oRateRaw / 100) : oRateRaw;
                 const _ctx: SrcCtx = {
                   totalVal, rate: rateSqft, qty: displayQty,
-                  overrideRate: effectiveOverrideRate, overrideTotal: effectiveOverrideRate * displayQty,
+                  overrideRate: effectiveOverrideRate, overrideTotal: overrideTotalVal,
                   rowCalc: rowCalculatedValues, customVals: customColumnValues[boqItem.id]?.[0] || {},
                 };
-                const baseVal = resolveSource(baseSource, _ctx);
+                const baseVal = resolveSource(currentBaseSource, _ctx);
                 const multiplierVal = multiplierSource === "manual" ? manualMultiplier : resolveSource(multiplierSource, _ctx);
                 valNum = applyOperator(baseVal, multiplierVal, operator);
               } else {
@@ -3332,17 +3333,18 @@ export default function FinalizeBoq() {
           } else {
             let val = 0;
             const baseSource = (itemCol as any).baseSource;
+            const currentBaseSource = baseSource || "Total Value (₹)";
             const operator = (itemCol as any).operator || "%";
             const multiplierSource = (itemCol as any).multiplierSource || "manual";
             const manualMultiplier = (itemCol as any).percentageValue || 0;
 
-            if (baseSource && baseSource !== "manual") {
+            if (currentBaseSource && currentBaseSource !== "manual") {
               const _ctx: SrcCtx = {
                 totalVal, rate: rateSqft, qty: displayQty,
                 overrideRate: effectiveOverrideRate, overrideTotal: overrideTotalVal,
                 rowCalc: rowCalculatedValues, customVals: customColumnValues[boqItem.id]?.[0] || {},
               };
-              const bVal = resolveSource(baseSource, _ctx);
+              const bVal = resolveSource(currentBaseSource, _ctx);
               const mVal = multiplierSource === "manual" ? manualMultiplier : resolveSource(multiplierSource, _ctx);
               val = applyOperator(bVal, mVal, operator);
             } else {
